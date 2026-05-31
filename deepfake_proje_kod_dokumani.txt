@@ -1,5 +1,9 @@
 DEEPFAKE PROJE KOD DÖKÜMÜ
+<<<<<<< HEAD
 Oluşturulma Tarihi: 2026-05-31 16:52:05
+=======
+Oluşturulma Tarihi: 2026-05-31 15:51:56
+>>>>>>> origin/coklu_indir
 ==================================================
 
 
@@ -235,120 +239,134 @@ if __name__ == "__main__":
 
 ################################################################################
 ### DOSYA: .\backend\src\config.py
-### SATIR SAYISI: 13
+### SATIR SAYISI: 23
 ################################################################################
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 
-# Artık test için json dosyasının da içinde bulunduğu bu klasörü kullanıyoruz
-RAW_DATA_DIR = r"D:\Deepfake_Data\train_sample_videos" 
+# .env dosyasını yükle (Proje kök dizinindeki .env dosyasını arar)
+load_dotenv()
 
-# C Diskindeki projemizin ana dizini (Otomatik bulur)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# .env içerisinden veri setinin ana yolunu çek, eğer .env yoksa veya silindiyse hata ver
+ENV_DATASET_DIR = os.getenv("DATASET_ROOT_DIR")
 
-# Kırpılmış yüzleri ve işlenmiş ufak verileri kaydedeceğimiz proje içi klasör
-PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
+if not ENV_DATASET_DIR:
+    raise ValueError("KRİTİK HATA: .env dosyasında DATASET_ROOT_DIR bulunamadı! Lütfen .env dosyanızı kontrol edin.")
 
-# İşlenmiş veri klasörü yoksa otomatik oluştur
-os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
+DATASET_ROOT_DIR = Path(ENV_DATASET_DIR)
+
+# Alt klasör yollarını tek merkezden dağıtıyoruz
+RAW_DATA_DIR = DATASET_ROOT_DIR / "raw"
+PROCESSED_DATA_DIR = DATASET_ROOT_DIR / "processed_faces"
+STATS_FILE = DATASET_ROOT_DIR / "stats.txt"
+
+# Sistem başlatıldığında bu klasörlerin var olduğundan emin ol, yoksa oluştur
+RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 ################################################################################
 ### DOSYA: .\backend\src\data_loader.py
-### SATIR SAYISI: 91
+### SATIR SAYISI: 95
 ################################################################################
 
-import cv2
-import os
-import json
 import torch
-from facenet_pytorch import MTCNN
-from config import RAW_DATA_DIR
+from torch.utils.data import Dataset
+import h5py
+import numpy as np
+from pathlib import Path
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
-# GPU varsa GPU'yu, yoksa CPU'yu otomatik seç
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-print(f"Yüz algılama şu cihazda çalışıyor: {device}")
-
-# MTCNN yüz algılama modelini başlat
-mtcnn = MTCNN(keep_all=False, device=device)
-
-def extract_and_crop_faces(video_path, num_frames=5):
-    """Videodan yüzleri MTCNN ile bulup kırpar."""
-    cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    if total_frames == 0:
-        return []
-
-    step = max(1, total_frames // num_frames)
-    cropped_faces = []
-
-    for i in range(num_frames):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
-        success, frame = cap.read()
+class FastDeepfakeDataset(Dataset):
+    def __init__(self, data_path: str, transform=None):
+        """
+        data_path: .h5 dosyasının yolu veya .npz dosyalarının bulunduğu klasörün yolu.
+        """
+        self.data_path = Path(data_path)
+        self.transform = transform
         
-        if success:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Yüz tespiti yap
-            boxes, _ = mtcnn.detect(frame_rgb)
-            
-            if boxes is not None:
-                # İlk tespit edilen yüzün koordinatlarını al
-                box = boxes[0]
-                x1, y1, x2, y2 = [int(b) for b in box]
-                
-                # Sınırların dışına çıkmayı engelle
-                h, w, _ = frame_rgb.shape
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(w, x2), min(h, y2)
-                
-                face_crop = frame_rgb[y1:y2, x1:x2]
-                
-                # Kırpılan alan boş değilse 224x224'e boyutlandır
-                if face_crop.size != 0 and face_crop.shape[0] > 0 and face_crop.shape[1] > 0:
-                    face_resized = cv2.resize(face_crop, (224, 224))
-                    cropped_faces.append(face_resized)
-        else:
-            break
-
-    cap.release()
-    return cropped_faces
-
-def process_dataset(limit=2):
-    """
-    JSON dosyasını okur, videoları bulur ve yüzleri çıkarır.
-    """
-    json_path = os.path.join(RAW_DATA_DIR, "metadata.json")
-    
-    if not os.path.exists(json_path):
-        print(f"HATA: {json_path} bulunamadı! Yol: {json_path}")
-        return
-
-    with open(json_path, 'r') as f:
-        metadata = json.load(f)
-
-    print(f"Toplam {len(metadata)} video etiketi bulundu. İlk {limit} video işleniyor...\n")
-
-    count = 0
-    for video_name, info in metadata.items():
-        if count >= limit:
-            break
-            
-        label = info["label"] # "FAKE" veya "REAL"
-        video_path = os.path.join(RAW_DATA_DIR, video_name)
+        # Dosyanın tipini otomatik algıla
+        self.is_h5 = self.data_path.is_file() and self.data_path.suffix == '.h5'
+        self.is_npz_dir = self.data_path.is_dir()
         
-        if os.path.exists(video_path):
-            print(f"İşleniyor: {video_name} | Etiket: {label}")
-            faces = extract_and_crop_faces(video_path, num_frames=5)
-            print(f" -> Çıkarılan yüz sayısı: {len(faces)}\n")
-        else:
-            print(f"UYARI: {video_name} klasörde bulunamadı.")
-            
-        count += 1
+        if not (self.is_h5 or self.is_npz_dir):
+            raise ValueError("Geçersiz veri yolu! .h5 dosyası veya .npz klasörü olmalı.")
 
-if __name__ == "__main__":
-    process_dataset(limit=2)
+        # --- HDF5 (.h5) OKUMA MODU ---
+        if self.is_h5:
+            # Sadece dosyanın başlıklarını okuyoruz (RAM'e yüklemiyoruz, okuma anında çekilecek)
+            self.h5_file = h5py.File(self.data_path, 'r')
+            self.length = self.h5_file['y'].shape[0]
+            print(f"[BİLGİ] HDF5 Veri Seti Yüklendi. Toplam Örnek: {self.length}")
+            
+        # --- NPZ PARÇALARI OKUMA MODU ---
+        elif self.is_npz_dir:
+            self.npz_files = list(self.data_path.glob("*.npz"))
+            self.data_map = [] # Hangi index'in hangi dosyada kaçıncı sırada olduğunu tutar
+            
+            print(f"[BİLGİ] NPZ Klasörü Taranıyor... ({len(self.npz_files)} dosya bulundu)")
+            for f_idx, f_path in enumerate(self.npz_files):
+                # Sadece metadata'yı okumak için mmap_mode kullanıyoruz
+                with np.load(f_path, mmap_mode='r') as data:
+                    num_items = data['y'].shape[0]
+                    for i in range(num_items):
+                        self.data_map.append((f_idx, i))
+                        
+            self.length = len(self.data_map)
+            print(f"[BİLGİ] NPZ Veri Seti Yüklendi. Toplam Örnek: {self.length}")
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        # 1. Ham Veriyi Çek
+        if self.is_h5:
+            # Diskten sadece istenen index'teki videonun 5 karesini ışık hızında RAM'e al
+            video_frames = self.h5_file['X'][idx] 
+            label = self.h5_file['y'][idx]
+        else:
+            f_idx, item_idx = self.data_map[idx]
+            with np.load(self.npz_files[f_idx]) as data:
+                video_frames = data['X'][item_idx]
+                label = data['y'][item_idx]
+
+        # 2. Veri Artırımı (Augmentation) ve PyTorch Formatına Çevirme
+        processed_frames = []
+        for frame in video_frames: # frame boyutu: (224, 224, 3)
+            if self.transform:
+                augmented = self.transform(image=frame)
+                frame_tensor = augmented['image']
+            else:
+                # Transform yoksa bile Numpy matrisini PyTorch Tensörüne çevirmeliyiz
+                # Numpy (H, W, C) formatındadır, PyTorch (C, H, W) ister.
+                frame_tensor = torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0
+            
+            processed_frames.append(frame_tensor)
+
+        # 5 kareyi paketle -> Boyut: (5, 3, 224, 224)
+        video_tensor = torch.stack(processed_frames)
+        label_tensor = torch.tensor([label], dtype=torch.float32)
+
+        return video_tensor, label_tensor
+
+# Eğitim için zorlaştırmalar (Data Augmentation)
+def get_transforms():
+    train_transform = A.Compose([
+        A.HorizontalFlip(p=0.5),
+        A.RandomBrightnessContrast(p=0.2),
+        A.ImageCompression(quality_lower=60, quality_upper=100, p=0.3),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ])
+    
+    val_transform = A.Compose([
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ])
+    return train_transform, val_transform
 
 
 ################################################################################
@@ -574,7 +592,7 @@ class DeepfakeDataset(Dataset):
     def __getitem__(self, idx):
         video_path, label = self.data[idx]
         
-        # MTCNN ile yüzleri çıkar (Numpy formatında)
+        # Yuzleri tespit et (Numpy formatinda)
         faces = extract_and_crop_faces(video_path, num_frames=self.num_frames)
         
         # Eğer videoda hiç yüz bulunamadıysa (karanlık vs.), sistemi çökertmek yerine siyah kareler veriyoruz
@@ -651,74 +669,135 @@ if __name__ == "__main__":
 
 ################################################################################
 ### DOSYA: .\backend\utils\data_pipeline.py
-### SATIR SAYISI: 169
+### SATIR SAYISI: 316
 ################################################################################
 
 import os
-from env import load_env_variables
+import sys
+import json
 import zipfile
 import shutil
 import subprocess
+import importlib.util
+from pathlib import Path
+
+# Proje ana dizinini yollara ekliyoruz
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(BASE_DIR))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+kaggle_token = os.getenv("KAGGLE_API_TOKEN")
+if kaggle_token:
+    os.environ["KAGGLE_API_TOKEN"] = kaggle_token
+
 import cv2
 import torch
-from pathlib import Path
+import numpy as np
 from tqdm import tqdm
-from facenet_pytorch import MTCNN
 
-# Yolları senin yapına göre dinamik ayarlıyoruz
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATASET_DIR = Path(r"C:\Users\ramaz\Desktop\Dataset")
-RAW_DIR = DATASET_DIR / "raw"
-PROCESSED_DIR = DATASET_DIR / "processed_faces"
-STATS_FILE = DATASET_DIR / "stats.txt"
+try:
+    import h5py
+    _HAS_H5PY = True
+except Exception:
+    h5py = None
+    _HAS_H5PY = False
+
+try:
+    from facenet_pytorch import MTCNN
+    _HAS_MTCNN = True
+except Exception:
+    MTCNN = None
+    _HAS_MTCNN = False
+
+# config.py'den yolları çekiyoruz
+from backend.src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 COMPETITION_NAME = "deepfake-detection-challenge"
-# Kaggle'daki zip isimleri genelde 00.zip, 01.zip şeklindedir (Örn: 50 parça)
 TOTAL_CHUNKS = 50 
+FRAMES_PER_VIDEO = 5 # Modelimiz her videodan 5 kare bekliyor
 
+# HDF5 dosyamızın kaydedileceği yol
+H5_FILE_PATH = PROCESSED_DATA_DIR / "deepfake_dataset.h5"
+NPZ_OUTPUT_DIR = PROCESSED_DATA_DIR / "npz_chunks"
+
+_FACE_CASCADE = None
+if not _HAS_MTCNN:
+    _FACE_CASCADE = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+
+def _detect_face_box(frame_rgb, mtcnn):
+    if _HAS_MTCNN and mtcnn is not None:
+        boxes, _ = mtcnn.detect(frame_rgb)
+        if boxes is None:
+            return None
+        return boxes[0]
+
+    if _FACE_CASCADE is None or _FACE_CASCADE.empty():
+        return None
+
+    gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+    faces = _FACE_CASCADE.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(30, 30),
+    )
+    if len(faces) == 0:
+        return None
+
+    x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+    return [x, y, x + w, y + h]
+
+def _ensure_kaggle_ready():
+    if importlib.util.find_spec("kaggle") is None:
+        print("[HATA] Kaggle CLI bulunamadi. 'pip install kaggle' ile kur.")
+        return False
+
+    # Eski username/key mantığını sildik, sadece API_TOKEN var mı diye bakıyoruz
+    if not os.getenv("KAGGLE_API_TOKEN"):
+        print("[HATA] Kaggle kimlik bilgileri yok. .env icine KAGGLE_API_TOKEN ekle.")
+        return False
+
+    return True
 class FileManager:
-    """İndirme, arşivden çıkarma ve silme işlemlerini yönetir."""
-    
-    @staticmethod
-    def ensure_directories():
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-        if not STATS_FILE.exists():
-            STATS_FILE.touch()
-
     @staticmethod
     def download_chunk(chunk_name: str) -> bool:
-        zip_path = RAW_DIR / chunk_name
+        zip_path = RAW_DATA_DIR / chunk_name
         if zip_path.exists():
-            print(f"[BİLGİ] {chunk_name} zaten mevcut. İndirme atlanıyor...")
             return True
+
+        if not _ensure_kaggle_ready():
+            return None
         
         print(f"[İNDİRİLİYOR] {chunk_name} Kaggle'dan çekiliyor...")
         try:
-            # Kaggle API'sini terminal komutu olarak çağırıyoruz
+            # sys.executable kullanarak doğrudan aktif venv içindeki python'u çağırıyoruz
+            # 'kaggle' yerine 'kaggle.cli' kullanmak modülün doğru tetiklenmesini sağlar
             subprocess.run([
-                "kaggle", "competitions", "download", 
+                sys.executable, "-m", "kaggle.cli", "competitions", "download", 
                 "-c", COMPETITION_NAME, 
                 "-f", chunk_name, 
-                "-p", str(RAW_DIR)
+                "-p", str(RAW_DATA_DIR)
             ], check=True)
             return True
         except subprocess.CalledProcessError:
-            print(f"[HATA] {chunk_name} indirilemedi. Bağlantıyı veya kaggle.json'ı kontrol et.")
+            print(f"[HATA] {chunk_name} indirilemedi.")
             return False
 
     @staticmethod
     def extract_and_delete_zip(chunk_name: str) -> Path:
-        zip_path = RAW_DIR / chunk_name
-        extract_path = RAW_DIR / chunk_name.replace(".zip", "")
+        zip_path = RAW_DATA_DIR / chunk_name
+        extract_path = RAW_DATA_DIR / chunk_name.replace(".zip", "")
         
         print(f"[ÇIKARTILIYOR] {chunk_name} arşivden çıkarılıyor...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(extract_path)
             
         print(f"[TEMİZLİK] {chunk_name} (.zip dosyası) siliniyor...")
-        os.remove(zip_path) # Hafızayı korumak için zip'i hemen siliyoruz
-        
+        os.remove(zip_path) 
         return extract_path
 
     @staticmethod
@@ -728,97 +807,183 @@ class FileManager:
 
 
 class FaceExtractor:
-    """RTX 5070 kullanarak videolardan yüz kırpma işlemlerini yapar."""
-    
     def __init__(self):
-        # CUDA kontrolü ve MTCNN yüz tespit modelinin yüklenmesi
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        print(f"[SİSTEM] Yüz çıkarıcı {self.device} üzerinde çalışıyor.")
-        
-        # margin: yüzün etrafında biraz boşluk bırakır, select_largest: sadece ana karakteri alır
-        self.mtcnn = MTCNN(margin=20, keep_all=False, select_largest=True, post_process=False, device=self.device)
+        if _HAS_MTCNN:
+            self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+            print(f"[SISTEM] Yuz cikarici {self.device} uzerinde calisiyor.")
+            self.mtcnn = MTCNN(
+                margin=20,
+                keep_all=False,
+                select_largest=True,
+                post_process=False,
+                device=self.device,
+            )
+        else:
+            self.device = None
+            self.mtcnn = None
+            print("[SISTEM] MTCNN bulunamadi, OpenCV Haar cascade kullaniliyor.")
 
-    def process_video(self, video_path: Path, output_dir: Path) -> int:
-        """Videoyu okur, saniyede 1 kare (FPS) alarak yüzleri kaydeder."""
+    def process_video_to_array(self, video_path: Path):
+        """Videoyu okur, tam 5 adet yüz karesi (224x224 RGB) çıkarır ve Numpy matrisi olarak döndürür."""
         cap = cv2.VideoCapture(str(video_path))
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        if fps == 0: fps = 30 # Fallback
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        frame_count = 0
-        saved_faces = 0
-        video_name = video_path.stem
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # Sadece saniyede 1 kare alarak veri tekrarını önlüyor ve hafıza kurtarıyoruz
-            if frame_count % fps == 0:
-                # OpenCV BGR okur, MTCNN RGB bekler
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Yüzü tespit et ve kaydet
-                face_filename = output_dir / f"{video_name}_frame_{frame_count}.jpg"
-                
-                try:
-                    # MTCNN doğrudan tensör veya imaj döndürür, save_path verirsek kendi kaydeder
-                    face = self.mtcnn(frame_rgb, save_path=str(face_filename))
-                    if face is not None:
-                        saved_faces += 1
-                except Exception as e:
-                    pass # Tespit edilemeyen bulanık kareleri atla
-                    
-            frame_count += 1
+        if total_frames == 0:
+            return None
+
+        step = max(1, total_frames // FRAMES_PER_VIDEO)
+        cropped_faces = []
+
+        for i in range(FRAMES_PER_VIDEO):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
+            success, frame = cap.read()
             
+            if success:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                box = _detect_face_box(frame_rgb, self.mtcnn)
+
+                if box is not None:
+                    x1, y1, x2, y2 = [int(b) for b in box]
+                    
+                    h, w, _ = frame_rgb.shape
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+                    
+                    face_crop = frame_rgb[y1:y2, x1:x2]
+                    
+                    if face_crop.size != 0 and face_crop.shape[0] > 0 and face_crop.shape[1] > 0:
+                        face_resized = cv2.resize(face_crop, (224, 224))
+                        cropped_faces.append(face_resized)
+            else:
+                break
+
         cap.release()
-        return saved_faces
+
+        # Eğer yüz bulunamadıysa None dön (Pipeline bu videoyu atlayacak)
+        if len(cropped_faces) == 0:
+            return None
+            
+        # Eğer 5'ten az yüz bulunduysa, son yüzü kopyalayarak 5'e tamamla (Padding)
+        while len(cropped_faces) < FRAMES_PER_VIDEO:
+            cropped_faces.append(cropped_faces[-1])
+            
+        # (5, 224, 224, 3) boyutunda bir numpy array'e çevir ve döndür
+        # uint8 formatı RAM'de minimum yer kaplar
+        return np.array(cropped_faces, dtype=np.uint8)
 
 
 class PipelineOrchestrator:
-    """Tüm süreci yöneten ana sınıf."""
-    
     def __init__(self):
-        FileManager.ensure_directories()
         self.extractor = FaceExtractor()
+        self.init_h5_file()
         
-    def log_stats(self, chunk_name: str, face_count: int):
-        """Hocaya sunulacak istatistikleri txt dosyasına yazar."""
-        with open(STATS_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{chunk_name} = {face_count} görsel\n")
-        print(f"[BAŞARILI] {chunk_name} işlendi. Toplam {face_count} yüz kırpıldı ve kaydedildi.")
+    def init_h5_file(self):
+        """Depolama formatini hazirlar (.h5 varsa, yoksa .npz parcalari)."""
+        if not _HAS_H5PY:
+            NPZ_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            return
+
+        if not H5_FILE_PATH.exists():
+            print("[BİLGİ] Yeni HDF5 Veri Seti dosyası oluşturuluyor...")
+            with h5py.File(H5_FILE_PATH, 'w') as hf:
+                # X: Görüntüler (Sınırsız video, 5 kare, 224 yükseklik, 224 genişlik, 3 renk)
+                hf.create_dataset('X', shape=(0, FRAMES_PER_VIDEO, 224, 224, 3), 
+                                  maxshape=(None, FRAMES_PER_VIDEO, 224, 224, 3), 
+                                  dtype='uint8')
+                # y: Etiketler (Sınırsız etiket)
+                hf.create_dataset('y', shape=(0,), maxshape=(None,), dtype='float32')
+
+    def _write_npz_chunk(self, X_batch, y_batch, chunk_name=None):
+        if len(X_batch) == 0:
+            return None
+
+        NPZ_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        label = Path(chunk_name).stem if chunk_name else "chunk"
+        out_path = NPZ_OUTPUT_DIR / f"chunk_{label}.npz"
+
+        X_arr = np.asarray(X_batch, dtype=np.uint8)
+        y_arr = np.asarray(y_batch, dtype=np.float32)
+        np.savez_compressed(out_path, X=X_arr, y=y_arr)
+        return out_path
+
+    def append_to_h5(self, X_batch, y_batch, chunk_name=None):
+        """Verileri RAM'den HDF5 dosyasina yazar, yoksa .npz parcalarina dokur."""
+        if len(X_batch) == 0:
+            return None
+
+        if not _HAS_H5PY:
+            return self._write_npz_chunk(X_batch, y_batch, chunk_name)
+
+        with h5py.File(H5_FILE_PATH, 'a') as hf:
+            current_size = hf['X'].shape[0]
+            new_size = current_size + len(X_batch)
+
+            hf['X'].resize((new_size, FRAMES_PER_VIDEO, 224, 224, 3))
+            hf['X'][current_size:new_size] = X_batch
+
+            hf['y'].resize((new_size,))
+            hf['y'][current_size:new_size] = y_batch
+        return H5_FILE_PATH
 
     def run(self):
-        print("\n--- DEEPFAKE VERİ İŞLEME MOTORU BAŞLATILDI ---\n")
+        output_label = ".h5" if _HAS_H5PY else ".npz"
+        print(f"\n--- DEEPFAKE {output_label} VERI ISLEME MOTORU BASLATILDI ---\n")
         
         for i in range(TOTAL_CHUNKS):
-            # 00.zip, 01.zip formatını oluşturur
             chunk_name = f"{i:02d}.zip"
             
-            # 1. İndirme (Eğer zaten varsa atlar)
             success = FileManager.download_chunk(chunk_name)
+            if success is None:
+                break
             if not success:
                 continue
                 
-            # 2. Arşivden çıkarma ve .zip'i anında silme
             extract_folder = FileManager.extract_and_delete_zip(chunk_name)
             
-            # 3. Klasördeki tüm .mp4 dosyalarını bul ve işle
+            # JSON'u oku
+            metadata_path = extract_folder / "metadata.json"
+            metadata = {}
+            if metadata_path.exists():
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+            
             videos = list(extract_folder.rglob("*.mp4"))
-            chunk_face_count = 0
             
-            print(f"[İŞLENİYOR] {chunk_name} içindeki {len(videos)} video analiz ediliyor...")
+            # RAM'de biriktireceğimiz geçici listeler
+            X_chunk = []
+            y_chunk = []
+            processed_video_count = 0
+            
+            print(f"[İŞLENİYOR] {chunk_name} analiz ediliyor...")
             for video_path in tqdm(videos, desc="Videolar"):
-                faces_saved = self.extractor.process_video(video_path, PROCESSED_DIR)
-                chunk_face_count += faces_saved
+                video_filename = video_path.name
                 
-            # 4. İstatistikleri kaydet
-            self.log_stats(chunk_name, chunk_face_count)
+                # Sadece metadata'da olan videoları işliyoruz
+                if video_filename not in metadata: continue
+                    
+                label_str = metadata[video_filename]["label"]
+                label_val = 1.0 if label_str == "FAKE" else 0.0
+                
+                # Yüzleri Numpy matrisi olarak çek
+                face_sequence = self.extractor.process_video_to_array(video_path)
+                
+                if face_sequence is not None:
+                    X_chunk.append(face_sequence)
+                    y_chunk.append(label_val)
+                    processed_video_count += 1
             
-            # 5. Ham videoları tamamen sil (Diski rahatlat)
+            # Tüm chunk işlenince topluca kaydet (Diski daha az yorar)
+            storage_label = ".h5" if _HAS_H5PY else ".npz"
+            print(f"[KAYDEDILIYOR] {processed_video_count} video verisi {storage_label} dosyasina yaziliyor...")
+            self.append_to_h5(X_chunk, y_chunk, chunk_name)
+            
+            # Temizlik
             FileManager.cleanup_raw_folder(extract_folder)
             
-        print("\n[BİTTİ] Tüm veri seti başarıyla işlendi ve temizlendi.")
+        if _HAS_H5PY:
+            print("\n[BITTI] Veri seti basariyla .h5 formatina sikistirildi.")
+        else:
+            print(f"\n[BITTI] Veri seti .npz parcalarina yazildi: {NPZ_OUTPUT_DIR}")
 
 if __name__ == "__main__":
     pipeline = PipelineOrchestrator()
@@ -830,6 +995,12 @@ if __name__ == "__main__":
 GENEL İSTATİSTİKLER
 ================================================================================
            Root: 99 satır
+<<<<<<< HEAD
         backend: 660 satır
 ------------------------------
 TOPLAM KOD SATIRI: 759
+=======
+        backend: 821 satır
+------------------------------
+TOPLAM KOD SATIRI: 920
+>>>>>>> origin/coklu_indir

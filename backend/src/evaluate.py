@@ -1,18 +1,22 @@
-import torch
-from torchvision import transforms
-import numpy as np
 import os
+import sys
+import torch
+import torchvision.transforms as transforms
+from pathlib import Path
 
-# Yazdığımız modülleri çağırıyoruz
-from model import DeepfakeDetector
-from data_loader import extract_and_crop_faces
+# Proje ana dizinini yollara ekliyoruz
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.append(str(BASE_DIR))
+
+from src.model import DeepfakeDetector
+# Canlı videodan yüz çıkarmak için güçlü FaceExtractor'ı çağırıyoruz
+from utils.data_pipeline import FaceExtractor
 
 def predict_video(video_path, model_path="models/deepfake_model_test.pth"):
-    # Cihaz seçimi
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     
     if not os.path.exists(model_path):
-        print(f"HATA: Eğitilmiş model bulunamadı ({model_path}). Lütfen önce train.py dosyasını çalıştırın.")
+        print(f"HATA: Eğitilmiş model bulunamadı ({model_path}).")
         return
         
     if not os.path.exists(video_path):
@@ -20,40 +24,35 @@ def predict_video(video_path, model_path="models/deepfake_model_test.pth"):
         return
 
     print("Yapay Zeka Yükleniyor...")
-    # Modeli iskelet olarak çağır ve eğitilmiş ağırlıkları içine doldur
     model = DeepfakeDetector(sequence_length=5).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
-    
-    # Çok Kritik: Modeli eğitim (train) modundan test (eval) moduna alıyoruz. 
-    # (Bu sayede Dropout gibi sadece eğitimde çalışan katmanlar kapanır ve tam performans tahmin yapılır)
     model.eval() 
 
-    # Görüntüleri eğitimdeki ile BİREBİR aynı formatta hazırlamalıyız
+    # Tensor formatına çevirici
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    print(f"\n[{os.path.basename(video_path)}] Analiz ediliyor...")
-    faces = extract_and_crop_faces(video_path, num_frames=5)
+    print(f"\n[{Path(video_path).name}] Analiz ediliyor...")
     
-    if len(faces) == 0:
-        print("Videoda yüz bulunamadı!")
+    # Yüz çıkarıcıyı başlat ve videoyu Numpy matrisine (5 kare) çevir
+    extractor = FaceExtractor()
+    face_sequence = extractor.process_video_to_array(Path(video_path))
+    
+    if face_sequence is None:
+        print("Videoda yüz bulunamadı veya işlenemedi!")
         return
-        
-    # Yüz eksiği varsa son kareyi kopyalayarak 5'e tamamla
-    while len(faces) < 5:
-        faces.append(faces[-1])
 
-    # Yüzleri tensöre çevir ve modele uygun boyuta (1, 5, 3, 224, 224) getir
-    face_tensors = [transform(face) for face in faces]
+    # Numpy matrisindeki her bir kareyi PyTorch Tensörüne çevir
+    face_tensors = [transform(face) for face in face_sequence]
+    
+    # Modele uygun boyuta (1, 5, 3, 224, 224) getir
     video_tensor = torch.stack(face_tensors).unsqueeze(0).to(device)
 
-    print("Sinir ağlarından geçiriliyor...")
-    # no_grad(): Test aşamasında olduğumuz için geriye dönük hesaplama (backward) yapmıyoruz, bellek tasarrufu!
+    print("Spatio-Temporal sinir ağlarından geçiriliyor...")
     with torch.no_grad():
         output = model(video_tensor)
-        # Sigmoid: Çıkan sonucu 0 (Gerçek) ile 1 (Sahte) arasında bir ihtimale (%) dönüştürür
         probability = torch.sigmoid(output).item() 
 
     print("\n" + "=" * 40)
@@ -66,7 +65,6 @@ def predict_video(video_path, model_path="models/deepfake_model_test.pth"):
     print("=" * 40 + "\n")
 
 if __name__ == "__main__":
-    # Test etmek istediğin videonun yolunu buraya yazıyorsun
-    # Önceki klasöründeki FAKE veya REAL bir videonun adını kopyalayabilirsin
-    ornek_video = r"D:\Deepfake_Data\train_sample_videos\aagfhgtpmv.mp4" 
+    # Test etmek istediğin ham .mp4 videosunun yolunu buraya yaz
+    ornek_video = r"C:\Users\ramaz\Desktop\test_video.mp4" 
     predict_video(ornek_video)

@@ -205,6 +205,7 @@ models/
 =======
 <<<<<<< HEAD
 
+<<<<<<< HEAD
 frontend/node_modules/
 frontend/.next/
 =======
@@ -222,3 +223,7 @@ Thumbs.db
 Thumbs.db
 >>>>>>> 74bc6a2 (feat: GPU destekli CNN+LSTM deepfake model mimarisi ve egitim dongusu eklendi)
 >>>>>>> gecici-yedek
+=======
+*./txt
+*./extract_codes_file.py
+>>>>>>> origin/coklu_indir
