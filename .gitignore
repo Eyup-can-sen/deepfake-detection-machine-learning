@@ -190,3 +190,6 @@ models/
 *.pth
 *.h5
 *.pt
+
+frontend/node_modules/
+frontend/.next/
