@@ -1,5 +1,5 @@
 DEEPFAKE PROJE KOD DÖKÜMÜ
-Oluşturulma Tarihi: 2026-05-31 15:00:57
+Oluşturulma Tarihi: 2026-05-31 15:51:56
 ==================================================
 
 
@@ -235,120 +235,134 @@ if __name__ == "__main__":
 
 ################################################################################
 ### DOSYA: .\backend\src\config.py
-### SATIR SAYISI: 13
+### SATIR SAYISI: 23
 ################################################################################
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 
-# Artık test için json dosyasının da içinde bulunduğu bu klasörü kullanıyoruz
-RAW_DATA_DIR = r"D:\Deepfake_Data\train_sample_videos" 
+# .env dosyasını yükle (Proje kök dizinindeki .env dosyasını arar)
+load_dotenv()
 
-# C Diskindeki projemizin ana dizini (Otomatik bulur)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# .env içerisinden veri setinin ana yolunu çek, eğer .env yoksa veya silindiyse hata ver
+ENV_DATASET_DIR = os.getenv("DATASET_ROOT_DIR")
 
-# Kırpılmış yüzleri ve işlenmiş ufak verileri kaydedeceğimiz proje içi klasör
-PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
+if not ENV_DATASET_DIR:
+    raise ValueError("KRİTİK HATA: .env dosyasında DATASET_ROOT_DIR bulunamadı! Lütfen .env dosyanızı kontrol edin.")
 
-# İşlenmiş veri klasörü yoksa otomatik oluştur
-os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
+DATASET_ROOT_DIR = Path(ENV_DATASET_DIR)
+
+# Alt klasör yollarını tek merkezden dağıtıyoruz
+RAW_DATA_DIR = DATASET_ROOT_DIR / "raw"
+PROCESSED_DATA_DIR = DATASET_ROOT_DIR / "processed_faces"
+STATS_FILE = DATASET_ROOT_DIR / "stats.txt"
+
+# Sistem başlatıldığında bu klasörlerin var olduğundan emin ol, yoksa oluştur
+RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 ################################################################################
 ### DOSYA: .\backend\src\data_loader.py
-### SATIR SAYISI: 91
+### SATIR SAYISI: 95
 ################################################################################
 
-import cv2
-import os
-import json
 import torch
-from facenet_pytorch import MTCNN
-from config import RAW_DATA_DIR
+from torch.utils.data import Dataset
+import h5py
+import numpy as np
+from pathlib import Path
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
-# GPU varsa GPU'yu, yoksa CPU'yu otomatik seç
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-print(f"Yüz algılama şu cihazda çalışıyor: {device}")
-
-# MTCNN yüz algılama modelini başlat
-mtcnn = MTCNN(keep_all=False, device=device)
-
-def extract_and_crop_faces(video_path, num_frames=5):
-    """Videodan yüzleri MTCNN ile bulup kırpar."""
-    cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    if total_frames == 0:
-        return []
-
-    step = max(1, total_frames // num_frames)
-    cropped_faces = []
-
-    for i in range(num_frames):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
-        success, frame = cap.read()
+class FastDeepfakeDataset(Dataset):
+    def __init__(self, data_path: str, transform=None):
+        """
+        data_path: .h5 dosyasının yolu veya .npz dosyalarının bulunduğu klasörün yolu.
+        """
+        self.data_path = Path(data_path)
+        self.transform = transform
         
-        if success:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Yüz tespiti yap
-            boxes, _ = mtcnn.detect(frame_rgb)
-            
-            if boxes is not None:
-                # İlk tespit edilen yüzün koordinatlarını al
-                box = boxes[0]
-                x1, y1, x2, y2 = [int(b) for b in box]
-                
-                # Sınırların dışına çıkmayı engelle
-                h, w, _ = frame_rgb.shape
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(w, x2), min(h, y2)
-                
-                face_crop = frame_rgb[y1:y2, x1:x2]
-                
-                # Kırpılan alan boş değilse 224x224'e boyutlandır
-                if face_crop.size != 0 and face_crop.shape[0] > 0 and face_crop.shape[1] > 0:
-                    face_resized = cv2.resize(face_crop, (224, 224))
-                    cropped_faces.append(face_resized)
-        else:
-            break
-
-    cap.release()
-    return cropped_faces
-
-def process_dataset(limit=2):
-    """
-    JSON dosyasını okur, videoları bulur ve yüzleri çıkarır.
-    """
-    json_path = os.path.join(RAW_DATA_DIR, "metadata.json")
-    
-    if not os.path.exists(json_path):
-        print(f"HATA: {json_path} bulunamadı! Yol: {json_path}")
-        return
-
-    with open(json_path, 'r') as f:
-        metadata = json.load(f)
-
-    print(f"Toplam {len(metadata)} video etiketi bulundu. İlk {limit} video işleniyor...\n")
-
-    count = 0
-    for video_name, info in metadata.items():
-        if count >= limit:
-            break
-            
-        label = info["label"] # "FAKE" veya "REAL"
-        video_path = os.path.join(RAW_DATA_DIR, video_name)
+        # Dosyanın tipini otomatik algıla
+        self.is_h5 = self.data_path.is_file() and self.data_path.suffix == '.h5'
+        self.is_npz_dir = self.data_path.is_dir()
         
-        if os.path.exists(video_path):
-            print(f"İşleniyor: {video_name} | Etiket: {label}")
-            faces = extract_and_crop_faces(video_path, num_frames=5)
-            print(f" -> Çıkarılan yüz sayısı: {len(faces)}\n")
-        else:
-            print(f"UYARI: {video_name} klasörde bulunamadı.")
-            
-        count += 1
+        if not (self.is_h5 or self.is_npz_dir):
+            raise ValueError("Geçersiz veri yolu! .h5 dosyası veya .npz klasörü olmalı.")
 
-if __name__ == "__main__":
-    process_dataset(limit=2)
+        # --- HDF5 (.h5) OKUMA MODU ---
+        if self.is_h5:
+            # Sadece dosyanın başlıklarını okuyoruz (RAM'e yüklemiyoruz, okuma anında çekilecek)
+            self.h5_file = h5py.File(self.data_path, 'r')
+            self.length = self.h5_file['y'].shape[0]
+            print(f"[BİLGİ] HDF5 Veri Seti Yüklendi. Toplam Örnek: {self.length}")
+            
+        # --- NPZ PARÇALARI OKUMA MODU ---
+        elif self.is_npz_dir:
+            self.npz_files = list(self.data_path.glob("*.npz"))
+            self.data_map = [] # Hangi index'in hangi dosyada kaçıncı sırada olduğunu tutar
+            
+            print(f"[BİLGİ] NPZ Klasörü Taranıyor... ({len(self.npz_files)} dosya bulundu)")
+            for f_idx, f_path in enumerate(self.npz_files):
+                # Sadece metadata'yı okumak için mmap_mode kullanıyoruz
+                with np.load(f_path, mmap_mode='r') as data:
+                    num_items = data['y'].shape[0]
+                    for i in range(num_items):
+                        self.data_map.append((f_idx, i))
+                        
+            self.length = len(self.data_map)
+            print(f"[BİLGİ] NPZ Veri Seti Yüklendi. Toplam Örnek: {self.length}")
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        # 1. Ham Veriyi Çek
+        if self.is_h5:
+            # Diskten sadece istenen index'teki videonun 5 karesini ışık hızında RAM'e al
+            video_frames = self.h5_file['X'][idx] 
+            label = self.h5_file['y'][idx]
+        else:
+            f_idx, item_idx = self.data_map[idx]
+            with np.load(self.npz_files[f_idx]) as data:
+                video_frames = data['X'][item_idx]
+                label = data['y'][item_idx]
+
+        # 2. Veri Artırımı (Augmentation) ve PyTorch Formatına Çevirme
+        processed_frames = []
+        for frame in video_frames: # frame boyutu: (224, 224, 3)
+            if self.transform:
+                augmented = self.transform(image=frame)
+                frame_tensor = augmented['image']
+            else:
+                # Transform yoksa bile Numpy matrisini PyTorch Tensörüne çevirmeliyiz
+                # Numpy (H, W, C) formatındadır, PyTorch (C, H, W) ister.
+                frame_tensor = torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0
+            
+            processed_frames.append(frame_tensor)
+
+        # 5 kareyi paketle -> Boyut: (5, 3, 224, 224)
+        video_tensor = torch.stack(processed_frames)
+        label_tensor = torch.tensor([label], dtype=torch.float32)
+
+        return video_tensor, label_tensor
+
+# Eğitim için zorlaştırmalar (Data Augmentation)
+def get_transforms():
+    train_transform = A.Compose([
+        A.HorizontalFlip(p=0.5),
+        A.RandomBrightnessContrast(p=0.2),
+        A.ImageCompression(quality_lower=60, quality_upper=100, p=0.3),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ])
+    
+    val_transform = A.Compose([
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ])
+    return train_transform, val_transform
 
 
 ################################################################################
@@ -574,7 +588,7 @@ class DeepfakeDataset(Dataset):
     def __getitem__(self, idx):
         video_path, label = self.data[idx]
         
-        # MTCNN ile yüzleri çıkar (Numpy formatında)
+        # Yuzleri tespit et (Numpy formatinda)
         faces = extract_and_crop_faces(video_path, num_frames=self.num_frames)
         
         # Eğer videoda hiç yüz bulunamadıysa (karanlık vs.), sistemi çökertmek yerine siyah kareler veriyoruz
@@ -651,74 +665,135 @@ if __name__ == "__main__":
 
 ################################################################################
 ### DOSYA: .\backend\utils\data_pipeline.py
-### SATIR SAYISI: 169
+### SATIR SAYISI: 316
 ################################################################################
 
 import os
-from env import load_env_variables
+import sys
+import json
 import zipfile
 import shutil
 import subprocess
+import importlib.util
+from pathlib import Path
+
+# Proje ana dizinini yollara ekliyoruz
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(BASE_DIR))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+kaggle_token = os.getenv("KAGGLE_API_TOKEN")
+if kaggle_token:
+    os.environ["KAGGLE_API_TOKEN"] = kaggle_token
+
 import cv2
 import torch
-from pathlib import Path
+import numpy as np
 from tqdm import tqdm
-from facenet_pytorch import MTCNN
 
-# Yolları senin yapına göre dinamik ayarlıyoruz
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATASET_DIR = Path(r"C:\Users\ramaz\Desktop\Dataset")
-RAW_DIR = DATASET_DIR / "raw"
-PROCESSED_DIR = DATASET_DIR / "processed_faces"
-STATS_FILE = DATASET_DIR / "stats.txt"
+try:
+    import h5py
+    _HAS_H5PY = True
+except Exception:
+    h5py = None
+    _HAS_H5PY = False
+
+try:
+    from facenet_pytorch import MTCNN
+    _HAS_MTCNN = True
+except Exception:
+    MTCNN = None
+    _HAS_MTCNN = False
+
+# config.py'den yolları çekiyoruz
+from backend.src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 COMPETITION_NAME = "deepfake-detection-challenge"
-# Kaggle'daki zip isimleri genelde 00.zip, 01.zip şeklindedir (Örn: 50 parça)
 TOTAL_CHUNKS = 50 
+FRAMES_PER_VIDEO = 5 # Modelimiz her videodan 5 kare bekliyor
 
+# HDF5 dosyamızın kaydedileceği yol
+H5_FILE_PATH = PROCESSED_DATA_DIR / "deepfake_dataset.h5"
+NPZ_OUTPUT_DIR = PROCESSED_DATA_DIR / "npz_chunks"
+
+_FACE_CASCADE = None
+if not _HAS_MTCNN:
+    _FACE_CASCADE = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+
+def _detect_face_box(frame_rgb, mtcnn):
+    if _HAS_MTCNN and mtcnn is not None:
+        boxes, _ = mtcnn.detect(frame_rgb)
+        if boxes is None:
+            return None
+        return boxes[0]
+
+    if _FACE_CASCADE is None or _FACE_CASCADE.empty():
+        return None
+
+    gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+    faces = _FACE_CASCADE.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(30, 30),
+    )
+    if len(faces) == 0:
+        return None
+
+    x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+    return [x, y, x + w, y + h]
+
+def _ensure_kaggle_ready():
+    if importlib.util.find_spec("kaggle") is None:
+        print("[HATA] Kaggle CLI bulunamadi. 'pip install kaggle' ile kur.")
+        return False
+
+    # Eski username/key mantığını sildik, sadece API_TOKEN var mı diye bakıyoruz
+    if not os.getenv("KAGGLE_API_TOKEN"):
+        print("[HATA] Kaggle kimlik bilgileri yok. .env icine KAGGLE_API_TOKEN ekle.")
+        return False
+
+    return True
 class FileManager:
-    """İndirme, arşivden çıkarma ve silme işlemlerini yönetir."""
-    
-    @staticmethod
-    def ensure_directories():
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-        if not STATS_FILE.exists():
-            STATS_FILE.touch()
-
     @staticmethod
     def download_chunk(chunk_name: str) -> bool:
-        zip_path = RAW_DIR / chunk_name
+        zip_path = RAW_DATA_DIR / chunk_name
         if zip_path.exists():
-            print(f"[BİLGİ] {chunk_name} zaten mevcut. İndirme atlanıyor...")
             return True
+
+        if not _ensure_kaggle_ready():
+            return None
         
         print(f"[İNDİRİLİYOR] {chunk_name} Kaggle'dan çekiliyor...")
         try:
-            # Kaggle API'sini terminal komutu olarak çağırıyoruz
+            # sys.executable kullanarak doğrudan aktif venv içindeki python'u çağırıyoruz
+            # 'kaggle' yerine 'kaggle.cli' kullanmak modülün doğru tetiklenmesini sağlar
             subprocess.run([
-                "kaggle", "competitions", "download", 
+                sys.executable, "-m", "kaggle.cli", "competitions", "download", 
                 "-c", COMPETITION_NAME, 
                 "-f", chunk_name, 
-                "-p", str(RAW_DIR)
+                "-p", str(RAW_DATA_DIR)
             ], check=True)
             return True
         except subprocess.CalledProcessError:
-            print(f"[HATA] {chunk_name} indirilemedi. Bağlantıyı veya kaggle.json'ı kontrol et.")
+            print(f"[HATA] {chunk_name} indirilemedi.")
             return False
 
     @staticmethod
     def extract_and_delete_zip(chunk_name: str) -> Path:
-        zip_path = RAW_DIR / chunk_name
-        extract_path = RAW_DIR / chunk_name.replace(".zip", "")
+        zip_path = RAW_DATA_DIR / chunk_name
+        extract_path = RAW_DATA_DIR / chunk_name.replace(".zip", "")
         
         print(f"[ÇIKARTILIYOR] {chunk_name} arşivden çıkarılıyor...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(extract_path)
             
         print(f"[TEMİZLİK] {chunk_name} (.zip dosyası) siliniyor...")
-        os.remove(zip_path) # Hafızayı korumak için zip'i hemen siliyoruz
-        
+        os.remove(zip_path) 
         return extract_path
 
     @staticmethod
@@ -728,593 +803,187 @@ class FileManager:
 
 
 class FaceExtractor:
-    """RTX 5070 kullanarak videolardan yüz kırpma işlemlerini yapar."""
-    
     def __init__(self):
-        # CUDA kontrolü ve MTCNN yüz tespit modelinin yüklenmesi
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        print(f"[SİSTEM] Yüz çıkarıcı {self.device} üzerinde çalışıyor.")
-        
-        # margin: yüzün etrafında biraz boşluk bırakır, select_largest: sadece ana karakteri alır
-        self.mtcnn = MTCNN(margin=20, keep_all=False, select_largest=True, post_process=False, device=self.device)
+        if _HAS_MTCNN:
+            self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+            print(f"[SISTEM] Yuz cikarici {self.device} uzerinde calisiyor.")
+            self.mtcnn = MTCNN(
+                margin=20,
+                keep_all=False,
+                select_largest=True,
+                post_process=False,
+                device=self.device,
+            )
+        else:
+            self.device = None
+            self.mtcnn = None
+            print("[SISTEM] MTCNN bulunamadi, OpenCV Haar cascade kullaniliyor.")
 
-    def process_video(self, video_path: Path, output_dir: Path) -> int:
-        """Videoyu okur, saniyede 1 kare (FPS) alarak yüzleri kaydeder."""
+    def process_video_to_array(self, video_path: Path):
+        """Videoyu okur, tam 5 adet yüz karesi (224x224 RGB) çıkarır ve Numpy matrisi olarak döndürür."""
         cap = cv2.VideoCapture(str(video_path))
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        if fps == 0: fps = 30 # Fallback
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        frame_count = 0
-        saved_faces = 0
-        video_name = video_path.stem
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # Sadece saniyede 1 kare alarak veri tekrarını önlüyor ve hafıza kurtarıyoruz
-            if frame_count % fps == 0:
-                # OpenCV BGR okur, MTCNN RGB bekler
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Yüzü tespit et ve kaydet
-                face_filename = output_dir / f"{video_name}_frame_{frame_count}.jpg"
-                
-                try:
-                    # MTCNN doğrudan tensör veya imaj döndürür, save_path verirsek kendi kaydeder
-                    face = self.mtcnn(frame_rgb, save_path=str(face_filename))
-                    if face is not None:
-                        saved_faces += 1
-                except Exception as e:
-                    pass # Tespit edilemeyen bulanık kareleri atla
-                    
-            frame_count += 1
+        if total_frames == 0:
+            return None
+
+        step = max(1, total_frames // FRAMES_PER_VIDEO)
+        cropped_faces = []
+
+        for i in range(FRAMES_PER_VIDEO):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
+            success, frame = cap.read()
             
+            if success:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                box = _detect_face_box(frame_rgb, self.mtcnn)
+
+                if box is not None:
+                    x1, y1, x2, y2 = [int(b) for b in box]
+                    
+                    h, w, _ = frame_rgb.shape
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+                    
+                    face_crop = frame_rgb[y1:y2, x1:x2]
+                    
+                    if face_crop.size != 0 and face_crop.shape[0] > 0 and face_crop.shape[1] > 0:
+                        face_resized = cv2.resize(face_crop, (224, 224))
+                        cropped_faces.append(face_resized)
+            else:
+                break
+
         cap.release()
-        return saved_faces
+
+        # Eğer yüz bulunamadıysa None dön (Pipeline bu videoyu atlayacak)
+        if len(cropped_faces) == 0:
+            return None
+            
+        # Eğer 5'ten az yüz bulunduysa, son yüzü kopyalayarak 5'e tamamla (Padding)
+        while len(cropped_faces) < FRAMES_PER_VIDEO:
+            cropped_faces.append(cropped_faces[-1])
+            
+        # (5, 224, 224, 3) boyutunda bir numpy array'e çevir ve döndür
+        # uint8 formatı RAM'de minimum yer kaplar
+        return np.array(cropped_faces, dtype=np.uint8)
 
 
 class PipelineOrchestrator:
-    """Tüm süreci yöneten ana sınıf."""
-    
     def __init__(self):
-        FileManager.ensure_directories()
         self.extractor = FaceExtractor()
+        self.init_h5_file()
         
-    def log_stats(self, chunk_name: str, face_count: int):
-        """Hocaya sunulacak istatistikleri txt dosyasına yazar."""
-        with open(STATS_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{chunk_name} = {face_count} görsel\n")
-        print(f"[BAŞARILI] {chunk_name} işlendi. Toplam {face_count} yüz kırpıldı ve kaydedildi.")
+    def init_h5_file(self):
+        """Depolama formatini hazirlar (.h5 varsa, yoksa .npz parcalari)."""
+        if not _HAS_H5PY:
+            NPZ_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            return
+
+        if not H5_FILE_PATH.exists():
+            print("[BİLGİ] Yeni HDF5 Veri Seti dosyası oluşturuluyor...")
+            with h5py.File(H5_FILE_PATH, 'w') as hf:
+                # X: Görüntüler (Sınırsız video, 5 kare, 224 yükseklik, 224 genişlik, 3 renk)
+                hf.create_dataset('X', shape=(0, FRAMES_PER_VIDEO, 224, 224, 3), 
+                                  maxshape=(None, FRAMES_PER_VIDEO, 224, 224, 3), 
+                                  dtype='uint8')
+                # y: Etiketler (Sınırsız etiket)
+                hf.create_dataset('y', shape=(0,), maxshape=(None,), dtype='float32')
+
+    def _write_npz_chunk(self, X_batch, y_batch, chunk_name=None):
+        if len(X_batch) == 0:
+            return None
+
+        NPZ_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        label = Path(chunk_name).stem if chunk_name else "chunk"
+        out_path = NPZ_OUTPUT_DIR / f"chunk_{label}.npz"
+
+        X_arr = np.asarray(X_batch, dtype=np.uint8)
+        y_arr = np.asarray(y_batch, dtype=np.float32)
+        np.savez_compressed(out_path, X=X_arr, y=y_arr)
+        return out_path
+
+    def append_to_h5(self, X_batch, y_batch, chunk_name=None):
+        """Verileri RAM'den HDF5 dosyasina yazar, yoksa .npz parcalarina dokur."""
+        if len(X_batch) == 0:
+            return None
+
+        if not _HAS_H5PY:
+            return self._write_npz_chunk(X_batch, y_batch, chunk_name)
+
+        with h5py.File(H5_FILE_PATH, 'a') as hf:
+            current_size = hf['X'].shape[0]
+            new_size = current_size + len(X_batch)
+
+            hf['X'].resize((new_size, FRAMES_PER_VIDEO, 224, 224, 3))
+            hf['X'][current_size:new_size] = X_batch
+
+            hf['y'].resize((new_size,))
+            hf['y'][current_size:new_size] = y_batch
+        return H5_FILE_PATH
 
     def run(self):
-        print("\n--- DEEPFAKE VERİ İŞLEME MOTORU BAŞLATILDI ---\n")
+        output_label = ".h5" if _HAS_H5PY else ".npz"
+        print(f"\n--- DEEPFAKE {output_label} VERI ISLEME MOTORU BASLATILDI ---\n")
         
         for i in range(TOTAL_CHUNKS):
-            # 00.zip, 01.zip formatını oluşturur
             chunk_name = f"{i:02d}.zip"
             
-            # 1. İndirme (Eğer zaten varsa atlar)
             success = FileManager.download_chunk(chunk_name)
+            if success is None:
+                break
             if not success:
                 continue
                 
-            # 2. Arşivden çıkarma ve .zip'i anında silme
             extract_folder = FileManager.extract_and_delete_zip(chunk_name)
             
-            # 3. Klasördeki tüm .mp4 dosyalarını bul ve işle
+            # JSON'u oku
+            metadata_path = extract_folder / "metadata.json"
+            metadata = {}
+            if metadata_path.exists():
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+            
             videos = list(extract_folder.rglob("*.mp4"))
-            chunk_face_count = 0
             
-            print(f"[İŞLENİYOR] {chunk_name} içindeki {len(videos)} video analiz ediliyor...")
+            # RAM'de biriktireceğimiz geçici listeler
+            X_chunk = []
+            y_chunk = []
+            processed_video_count = 0
+            
+            print(f"[İŞLENİYOR] {chunk_name} analiz ediliyor...")
             for video_path in tqdm(videos, desc="Videolar"):
-                faces_saved = self.extractor.process_video(video_path, PROCESSED_DIR)
-                chunk_face_count += faces_saved
+                video_filename = video_path.name
                 
-            # 4. İstatistikleri kaydet
-            self.log_stats(chunk_name, chunk_face_count)
+                # Sadece metadata'da olan videoları işliyoruz
+                if video_filename not in metadata: continue
+                    
+                label_str = metadata[video_filename]["label"]
+                label_val = 1.0 if label_str == "FAKE" else 0.0
+                
+                # Yüzleri Numpy matrisi olarak çek
+                face_sequence = self.extractor.process_video_to_array(video_path)
+                
+                if face_sequence is not None:
+                    X_chunk.append(face_sequence)
+                    y_chunk.append(label_val)
+                    processed_video_count += 1
             
-            # 5. Ham videoları tamamen sil (Diski rahatlat)
+            # Tüm chunk işlenince topluca kaydet (Diski daha az yorar)
+            storage_label = ".h5" if _HAS_H5PY else ".npz"
+            print(f"[KAYDEDILIYOR] {processed_video_count} video verisi {storage_label} dosyasina yaziliyor...")
+            self.append_to_h5(X_chunk, y_chunk, chunk_name)
+            
+            # Temizlik
             FileManager.cleanup_raw_folder(extract_folder)
             
-        print("\n[BİTTİ] Tüm veri seti başarıyla işlendi ve temizlendi.")
+        if _HAS_H5PY:
+            print("\n[BITTI] Veri seti basariyla .h5 formatina sikistirildi.")
+        else:
+            print(f"\n[BITTI] Veri seti .npz parcalarina yazildi: {NPZ_OUTPUT_DIR}")
 
 if __name__ == "__main__":
     pipeline = PipelineOrchestrator()
     pipeline.run()
-
-
-################################################################################
-### DOSYA: .\frontend\next-env.d.ts
-### SATIR SAYISI: 6
-################################################################################
-
-/// <reference types="next" />
-/// <reference types="next/image-types/global" />
-import "./.next/dev/types/routes.d.ts";
-
-// NOTE: This file should not be edited
-// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
-
-
-
-################################################################################
-### DOSYA: .\frontend\next.config.ts
-### SATIR SAYISI: 7
-################################################################################
-
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  /* config options here */
-};
-
-export default nextConfig;
-
-
-
-################################################################################
-### DOSYA: .\frontend\src\app\globals.css
-### SATIR SAYISI: 130
-################################################################################
-
-@import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
-
-@custom-variant dark (&:is(.dark *));
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-manrope);
-  --font-mono: var(--font-jetbrains-mono);
-  --font-heading: var(--font-oxanium);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
-
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-  html {
-    @apply font-sans;
-  }
-}
-
-
-################################################################################
-### DOSYA: .\frontend\src\app\layout.tsx
-### SATIR SAYISI: 41
-################################################################################
-
-import type { Metadata } from "next";
-import { JetBrains_Mono, Manrope, Oxanium } from "next/font/google";
-import "./globals.css";
-
-const bodyFont = Manrope({
-  variable: "--font-manrope",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
-
-const headingFont = Oxanium({
-  variable: "--font-oxanium",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-});
-
-const monoFont = JetBrains_Mono({
-  variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-});
-
-export const metadata: Metadata = {
-  title: "Create Next App",
-  description: "Generated by create next app",
-};
-
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  return (
-    <html
-      lang="en"
-      className={`${bodyFont.variable} ${headingFont.variable} ${monoFont.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
-    </html>
-  );
-}
-
-
-
-################################################################################
-### DOSYA: .\frontend\src\app\page.tsx
-### SATIR SAYISI: 229
-################################################################################
-
-'use client';
-
-import React, { useState, useRef } from 'react';
-import { UploadCloud, ShieldCheck, AlertTriangle, FileVideo, Activity, Target, Zap, Play, Check } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-
-export default function ModernDeepfakeDetectorUI() {
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [showResults, setShowResults] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Sahte bir analiz süreci simülasyonu
-  const handleUploadAndAnalyze = () => {
-    setIsAnalyzing(true);
-    setShowResults(false);
-    
-    // Rastgele bir video adı simülasyonu
-    const videoNames = ["sample_interview_01.mp4", "social_media_ad.avi", "security_cam_feed_52.mp4"];
-    const randomVideoName = videoNames[Math.floor(Math.random() * videoNames.length)];
-    
-    setTimeout(() => {
-      setIsAnalyzing(false);
-      setShowResults(true);
-    }, 4500); // Daha gerçekçi bir süre
-  };
-
-  const currentVideoName = "sample_interview_01.mp4"; // Simüle edilmiş video adı
-
-  return (
-    <div className="min-h-screen bg-slate-950 p-6 md:p-12 lg:p-16 font-sans text-slate-100 antialiased relative overflow-hidden">
-      
-      {/* Arka plan dekoratif öğeler */}
-      <div className="absolute top-0 left-1/4 w-96 h-96 bg-indigo-900/10 rounded-full blur-[128px] opacity-70"></div>
-      <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-red-900/10 rounded-full blur-[100px] opacity-70"></div>
-
-      {/* Header Section */}
-      <div className="max-w-6xl mx-auto mb-16 relative z-10 border-b border-slate-800 pb-10">
-        <div className="flex items-center gap-4">
-            <Zap className="w-10 h-10 text-indigo-400 p-2 bg-indigo-950 rounded-lg border border-indigo-900"/>
-            <div>
-                <h1 className="text-5xl md:text-6xl font-heading font-semibold tracking-[-0.02em] leading-[0.95] mb-2 bg-gradient-to-r from-slate-100 to-indigo-300 bg-clip-text text-transparent">
-                  KayuAI
-                </h1>
-                <p className="text-sm md:text-base text-slate-400/90 font-medium tracking-[0.06em]">
-                  Deepfake Analiz Motoru &copy; - Gelişmiş Tehdit Algılama Platformu
-                </p>
-            </div>
-        </div>
-      </div>
-
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-5 gap-10 relative z-10">
-        
-        {/* Sol Kolon: Yükleme ve Sistem Durumu */}
-        <div className="lg:col-span-2 flex flex-col gap-8">
-          <Card className="border border-slate-800 shadow-2xl bg-slate-900/70 backdrop-blur-sm overflow-hidden rounded-3xl">
-            <CardHeader className="pb-2 border-b border-slate-800">
-                <CardTitle className="text-lg font-semibold text-slate-200">Video Yükle ve Başla</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col items-center justify-center p-10 text-center relative">
-              
-              {/* Yükleme Alanı Efekti */}
-              <div className="absolute inset-0 bg-slate-800/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-
-              <div 
-                className="bg-slate-800/40 border-2 border-slate-700 p-6 rounded-3xl mb-6 cursor-pointer group hover:border-indigo-700 hover:bg-slate-800 transition-all w-full max-w-sm flex flex-col items-center"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <div className="bg-indigo-950/70 p-5 rounded-2xl mb-5 border border-indigo-900 group-hover:scale-110 transition-transform">
-                  <UploadCloud className="w-12 h-12 text-indigo-400" />
-                </div>
-                <h3 className="text-2xl font-heading font-semibold text-slate-100 mb-2 tracking-[-0.01em]">Yeni Analiz Başlat</h3>
-                <p className="text-sm text-slate-400 mb-8 max-w-xs leading-relaxed">
-                  MP4, AVI veya MOV formatında dosyanızı buraya sürükleyin veya <span className='text-indigo-400 font-medium'>tıklayarak seçin</span>. (Maks: 50MB)
-                </p>
-                <input type="file" accept=".mp4,.avi,.mov" ref={fileInputRef} className="hidden" onChange={handleUploadAndAnalyze} disabled={isAnalyzing} />
-              </div>
-
-              <Button 
-                onClick={handleUploadAndAnalyze} 
-                disabled={isAnalyzing}
-                className={`w-full max-w-sm h-14 text-lg font-semibold rounded-2xl transition-all duration-300 relative overflow-hidden ${isAnalyzing ? 'bg-indigo-950/70 border border-indigo-900' : 'bg-indigo-600 hover:bg-indigo-700 border border-indigo-500'}`}
-              >
-                {isAnalyzing ? (
-                  <span className="flex items-center gap-3 relative z-10 text-indigo-300 font-heading tracking-[0.02em]">
-                    <div className="w-4 h-4 rounded-full border-2 border-indigo-300 border-r-transparent animate-spin"></div>
-                    KayuAI Motor Çalışıyor...
-                  </span>
-                ) : (
-                  <>
-                  <span className='relative z-10 flex items-center gap-2 font-heading tracking-[0.02em]'>
-                    <Play className='w-5 h-5'/> Analiz Motorunu Başlat
-                  </span>
-                  <div className="absolute inset-0 bg-indigo-500/10 blur-[20px] opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                  </>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Sistem Durumu */}
-          <Card className="shadow-lg bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-            <CardHeader className="pb-3 border-b border-slate-800">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2.5 text-slate-400">
-                <Target className="w-5 h-5 text-indigo-400" /> Hesaplama Motoru Durumu
-              </CardTitle>
-            </CardHeader>
-            <CardContent className='pt-5'>
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2.5 font-medium text-slate-300">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> KayuAI Model v2.1 (Pytorch)
-                </span>
-                <span className="font-mono text-xs text-indigo-400 bg-indigo-950/70 px-3 py-1 rounded-full border border-indigo-900">NVIDIA RTX 5070 Aktif</span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Sağ Kolon: Analiz Sonuçları */}
-        <div className="lg:col-span-3">
-          <Card className={`shadow-3xl bg-slate-900 border border-slate-800 rounded-3xl h-full transition-all duration-700 relative overflow-hidden ${showResults ? 'opacity-100 translate-y-0' : 'opacity-30 translate-y-4 pointer-events-none'}`}>
-            
-            <CardHeader className="pb-5 border-b border-slate-800 relative z-10">
-              <div className="flex items-center justify-between gap-6">
-                <div className='flex items-center gap-4'>
-                    <FileVideo className="w-10 h-10 text-slate-500"/>
-                    <div>
-                      <CardTitle className="text-2xl font-bold tracking-tight text-slate-100">
-                        Olay Analiz Raporu
-                      </CardTitle>
-                      <CardDescription className="mt-1 text-slate-400 font-mono text-xs">
-                        Dosya Kimliği: <span className='text-slate-200'>a1b2c3d4-e5f6g7h8.evnt</span>
-                      </CardDescription>
-                    </div>
-                </div>
-                {showResults && (
-                  <Badge variant="destructive" className="bg-red-950/70 text-red-300 border border-red-900 text-sm px-4 py-1.5 rounded-full font-semibold flex gap-2 items-center">
-                    <AlertTriangle className='w-4 h-4'/> Yüksek Risk Tespit Edildi
-                  </Badge>
-                )}
-              </div>
-            </CardHeader>
-            
-            <CardContent className="pt-8 flex flex-col gap-8 relative z-10">
-              {/* Ana Skor */}
-              <div className='p-6 bg-slate-950 border border-slate-800 rounded-3xl shadow-inner'>
-                <div className="flex justify-between items-end mb-3">
-                  <span className="text-lg font-heading font-semibold text-slate-300 tracking-[0.02em]">Toplam Manipülasyon İhtimali (Skor)</span>
-                  <div className='text-right'>
-                    <span className="text-6xl font-heading font-extrabold text-red-500 tracking-[-0.02em] tabular-nums bg-gradient-to-br from-red-400 to-red-600 bg-clip-text text-transparent">89.4%</span>
-                    <span className='block text-xs font-mono text-red-400/70'>Güven Aralığı: &plusmn; 2.1%</span>
-                  </div>
-                </div>
-                <Progress value={89.4} className="h-4 bg-slate-800 rounded-full [&>div]:bg-gradient-to-r [&>div]:from-red-600 [&>div]:to-red-400 [&>div]:border [&>div]:border-red-500/50" />
-              </div>
-
-              <Separator className='bg-slate-800'/>
-
-              {/* Detaylı Metrikler */}
-              <div className="space-y-6">
-                <h4 className="font-heading font-semibold text-xs text-slate-500 uppercase tracking-widest pl-1">Vektör Tabanlı Tehdit Analizi</h4>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  
-                  {/* Spatial Kartı */}
-                  <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl flex flex-col gap-3 relative overflow-hidden group">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-red-950/70 p-2.5 rounded-xl border border-red-900 transition-colors group-hover:bg-red-900/70">
-                        <Target className="w-5 h-5 text-red-400" />
-                      </div>
-                      <p className="font-bold text-slate-100 tracking-tight">Görsel Uyuşmazlık</p>
-                    </div>
-                    <p className="text-xs text-slate-400 leading-relaxed min-h-16">Piksel düzeyinde doku bozulması ve yüz sınırlarında artefaktlar tespit edildi. (GAN İzi)</p>
-                    <div className='w-full text-right mt-auto'>
-                      <Badge className="bg-slate-800 text-red-400 text-xs font-mono px-3 py-1 rounded-full">Kritik: Spatial</Badge>
-                    </div>
-                    <div className='absolute inset-0 border-r-4 border-red-600 opacity-50'></div>
-                  </div>
-
-                  {/* Temporal Kartı */}
-                  <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl flex flex-col gap-3 relative overflow-hidden group">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-amber-950/70 p-2.5 rounded-xl border border-amber-900 transition-colors group-hover:bg-amber-900/70">
-                        <Check className="w-5 h-5 text-amber-400" />
-                      </div>
-                      <p className="font-bold text-slate-100 tracking-tight">Zamansal Tutarsızlık</p>
-                    </div>
-                    <p className="text-xs text-slate-400 leading-relaxed min-h-16">Göz kırpma frekansında ve mikro-ifadelerde doğal olmayan atlamalar mevcut. (LSTM Skoru)</p>
-                    <div className='w-full text-right mt-auto'>
-                      <Badge className="bg-slate-800 text-amber-400 text-xs font-mono px-3 py-1 rounded-full">Yüksek: Temporal</Badge>
-                    </div>
-                    <div className='absolute inset-0 border-r-4 border-amber-500 opacity-50'></div>
-                  </div>
-
-                  {/* Audio Kartı */}
-                  <div className="bg-slate-950 border border-slate-800 p-5 rounded-2xl flex flex-col gap-3 relative overflow-hidden group">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-emerald-950/70 p-2.5 rounded-xl border border-emerald-900 transition-colors group-hover:bg-emerald-900/70">
-                        <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                      </div>
-                      <p className="font-bold text-slate-100 tracking-tight">İşitsel Analiz</p>
-                    </div>
-                    <p className="text-xs text-slate-400 leading-relaxed min-h-16">Ses spektrumu ve dudak hareketleri %95 oranında eşleşiyor. (Audio-Visual Match)</p>
-                    <div className='w-full text-right mt-auto'>
-                      <Badge className="bg-slate-800 text-emerald-400 text-xs font-mono px-3 py-1 rounded-full">Güvenli: Audio</Badge>
-                    </div>
-                    <div className='absolute inset-0 border-r-4 border-emerald-500 opacity-50'></div>
-                  </div>
-
-                </div>
-              </div>
-
-            </CardContent>
-          </Card>
-        </div>
-
-      </div>
-
-      {/* Footer / Alt Bilgi */}
-      <div className="max-w-6xl mx-auto mt-20 text-center text-xs text-slate-600 relative z-10 border-t border-slate-800 pt-6 font-mono">
-        &copy; 2026 KayuAI - Tüm Hakları Saklıdır. Deepfake Analiz Platformu.
-      </div>
-
-    </div>
-  );
-}
-
-
-################################################################################
-### DOSYA: .\frontend\src\hooks\use-mobile.ts
-### SATIR SAYISI: 19
-################################################################################
-
-import * as React from "react"
-
-const MOBILE_BREAKPOINT = 768
-
-export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
-
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    }
-    mql.addEventListener("change", onChange)
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    return () => mql.removeEventListener("change", onChange)
-  }, [])
-
-  return !!isMobile
-}
-
-
-
-################################################################################
-### DOSYA: .\frontend\src\lib\utils.ts
-### SATIR SAYISI: 6
-################################################################################
-
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
-
 
 
 
@@ -1322,7 +991,6 @@ export function cn(...inputs: ClassValue[]) {
 GENEL İSTATİSTİKLER
 ================================================================================
            Root: 99 satır
-        backend: 660 satır
-       frontend: 438 satır
+        backend: 821 satır
 ------------------------------
-TOPLAM KOD SATIRI: 1197
+TOPLAM KOD SATIRI: 920

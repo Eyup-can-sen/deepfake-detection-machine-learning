@@ -1,13 +1,23 @@
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 
-# Artık test için json dosyasının da içinde bulunduğu bu klasörü kullanıyoruz
-RAW_DATA_DIR = r"D:\Deepfake_Data\train_sample_videos" 
+# .env dosyasını yükle (Proje kök dizinindeki .env dosyasını arar)
+load_dotenv()
 
-# C Diskindeki projemizin ana dizini (Otomatik bulur)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# .env içerisinden veri setinin ana yolunu çek, eğer .env yoksa veya silindiyse hata ver
+ENV_DATASET_DIR = os.getenv("DATASET_ROOT_DIR")
 
-# Kırpılmış yüzleri ve işlenmiş ufak verileri kaydedeceğimiz proje içi klasör
-PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
+if not ENV_DATASET_DIR:
+    raise ValueError("KRİTİK HATA: .env dosyasında DATASET_ROOT_DIR bulunamadı! Lütfen .env dosyanızı kontrol edin.")
 
-# İşlenmiş veri klasörü yoksa otomatik oluştur
-os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
+DATASET_ROOT_DIR = Path(ENV_DATASET_DIR)
+
+# Alt klasör yollarını tek merkezden dağıtıyoruz
+RAW_DATA_DIR = DATASET_ROOT_DIR / "raw"
+PROCESSED_DATA_DIR = DATASET_ROOT_DIR / "processed_faces"
+STATS_FILE = DATASET_ROOT_DIR / "stats.txt"
+
+# Sistem başlatıldığında bu klasörlerin var olduğundan emin ol, yoksa oluştur
+RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)

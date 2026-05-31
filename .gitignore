@@ -191,5 +191,5 @@ models/
 *.h5
 *.pt
 
-frontend/node_modules/
-frontend/.next/
+*./txt
+*./extract_codes_file.py

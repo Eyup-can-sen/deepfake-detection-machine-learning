@@ -1,0 +1,20 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Çekirdek Makine Öğrenmesi (GPU Destekli)
+torch==2.12.0
+torchvision==0.27.0
+
+# Yüz Tanıma ve Görüntü İşleme
+facenet-pytorch
+opencv-python==4.8.1.78
+
+# Veri Analizi, Sıkıştırma ve Yardımcılar
+numpy==1.26.4
+pandas==3.0.3
+tqdm==4.67.3
+python-dotenv==1.0.1
+h5py==3.12.1
+kaggle==1.6.17
+
+# Veri Artırımı (Data Augmentation)
+albumentations
