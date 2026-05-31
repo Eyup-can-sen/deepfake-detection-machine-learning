@@ -184,12 +184,34 @@ cython_debug/
 
 # Veri setleri (GitHub'a atılmayacak kadar büyük)
 data/
+D:/Deepfake_Data/
+RAW_DATA_DIR/
 
-# Model ağırlıkları ve eğitim çıktıları
+# Videolar ve Görseller (Hiçbir video formatı repoya gitmemeli)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.jpg
+*.jpeg
+*.png
+
+# Model ağırlıkları ve eğitim çıktıları (Boyutları çok yüksek)
 models/
 *.pth
 *.h5
 *.pt
+<<<<<<< HEAD
 
 frontend/node_modules/
 frontend/.next/
+=======
+*.onnx
+
+# Editör Ayarları (Sisteme özel yolların ekibe gitmemesi için)
+.vscode/
+
+# İşletim sistemi kalıntıları
+.DS_Store
+Thumbs.db
+>>>>>>> 74bc6a2 (feat: GPU destekli CNN+LSTM deepfake model mimarisi ve egitim dongusu eklendi)
