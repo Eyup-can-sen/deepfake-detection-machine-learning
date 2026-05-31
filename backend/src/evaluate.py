@@ -66,5 +66,5 @@ def predict_video(video_path, model_path="models/deepfake_model_test.pth"):
 
 if __name__ == "__main__":
     # Test etmek istediğin ham .mp4 videosunun yolunu buraya yaz
-    ornek_video = r"C:\Users\ramaz\Desktop\test_video.mp4" 
+    ornek_video = r"D:\Deepfake_Data\train_sample_videos\aagfhgtpmv.mp4" 
     predict_video(ornek_video)

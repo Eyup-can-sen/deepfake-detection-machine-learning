@@ -18,7 +18,7 @@ KAGGLE_API_TOKEN = os.getenv("KAGGLE_API_TOKEN")
 if not KAGGLE_API_TOKEN:
     raise ValueError("KRİTİK HATA: .env dosyasında KAGGLE_API_TOKEN bulunamadı!")
 
-# Kaggle kütüphanesi bu ortam değişkenini veya ~/.kaggle/access_token dosyasını okur
+# Kaggle kütüphanesi bu ortam değişkenini okur
 os.environ['KAGGLE_API_TOKEN'] = KAGGLE_API_TOKEN
 
 # Token'ı ~/.kaggle/access_token dosyasına da yaz (yedek olarak)
@@ -27,7 +27,7 @@ _kaggle_dir.mkdir(parents=True, exist_ok=True)
 _access_token_path = _kaggle_dir / "access_token"
 _access_token_path.write_text(KAGGLE_API_TOKEN)
 
-# KAGGLE API'YI DOĞRUDAN PYTHON İÇİNDE BAŞLATIYORUZ
+# KAGGLE API'YI BAŞLATIYORUZ
 from kaggle.api.kaggle_api_extended import KaggleApi
 api = KaggleApi()
 api.authenticate()
@@ -36,13 +36,7 @@ import cv2
 import torch
 import numpy as np
 from tqdm import tqdm
-
-try:
-    import h5py
-    _HAS_H5PY = True
-except ImportError:
-    h5py = None
-    _HAS_H5PY = False
+from PIL import Image
 
 try:
     from facenet_pytorch import MTCNN
@@ -56,7 +50,7 @@ from backend.src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 COMPETITION_NAME = "deepfake-detection-challenge"
 FRAMES_PER_VIDEO = 5 
 
-# Kaggle artık DFDC verilerini Dataset olarak sunuyor (eski zip yapısı kaldırıldı)
+# Kaggle artık DFDC verilerini Dataset olarak sunuyor
 DFDC_DATASETS = [
     {
         "slug": "pranay22077/dfdc-10",
@@ -67,9 +61,6 @@ DFDC_DATASETS = [
         "label": "DFDC Part 10-19",
     },
 ]
-
-H5_FILE_PATH = PROCESSED_DATA_DIR / "deepfake_dataset.h5"
-NPZ_OUTPUT_DIR = PROCESSED_DATA_DIR / "npz_chunks"
 
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -139,7 +130,7 @@ class FaceExtractor:
         if _HAS_MTCNN:
             if torch.cuda.is_available():
                 self.device = torch.device('cuda:0')
-                print(f"[SİSTEM] Yüz Çıkarıcı Donanımı: {torch.cuda.get_device_name(0)}")
+                print(f"[SİSTEM] MTCNN Yüz Kırpıcı Donanımı: {torch.cuda.get_device_name(0)} (cuda:0)")
             else:
                 self.device = torch.device('cpu')
                 print(f"[UYARI] CUDA bulunamadı. CPU üzerinde çalışıyor.")
@@ -151,6 +142,7 @@ class FaceExtractor:
         else:
             self.device = None
             self.mtcnn = None
+            print("[UYARI] MTCNN bulunamadı. OpenCV Haar Cascade kullanılacak.")
 
     def process_video_to_array(self, video_path: Path):
         cap = cv2.VideoCapture(str(video_path))
@@ -181,53 +173,36 @@ class FaceExtractor:
 
         cap.release()
         if len(cropped_faces) == 0: return None
-        while len(cropped_faces) < FRAMES_PER_VIDEO: cropped_faces.append(cropped_faces[-1])
+        while len(cropped_faces) < FRAMES_PER_VIDEO: 
+            cropped_faces.append(cropped_faces[-1])
         return np.array(cropped_faces, dtype=np.uint8)
 
 class PipelineOrchestrator:
     def __init__(self):
         self.extractor = FaceExtractor()
-        self.init_h5_file()
+        self.metadata_path = PROCESSED_DATA_DIR / "metadata.json"
         
-    def init_h5_file(self):
-        if not _HAS_H5PY:
-            NPZ_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            return
-
-        if not H5_FILE_PATH.exists():
-            print("[BİLGİ] Yeni HDF5 Veri Seti dosyası oluşturuluyor...")
-            with h5py.File(H5_FILE_PATH, 'w') as hf:
-                hf.create_dataset('X', shape=(0, FRAMES_PER_VIDEO, 224, 224, 3), 
-                                  maxshape=(None, FRAMES_PER_VIDEO, 224, 224, 3), dtype='uint8')
-                hf.create_dataset('y', shape=(0,), maxshape=(None,), dtype='float32')
-
-    def _write_npz_chunk(self, X_batch, y_batch, chunk_name=None):
-        if len(X_batch) == 0: return None
-        label = Path(chunk_name).stem if chunk_name else "chunk"
-        out_path = NPZ_OUTPUT_DIR / f"chunk_{label}.npz"
-        np.savez_compressed(out_path, X=np.asarray(X_batch, dtype=np.uint8), y=np.asarray(y_batch, dtype=np.float32))
-        return out_path
-
-    def append_to_h5(self, X_batch, y_batch, chunk_name=None):
-        if len(X_batch) == 0: return None
-        if not _HAS_H5PY: return self._write_npz_chunk(X_batch, y_batch, chunk_name)
-
-        with h5py.File(H5_FILE_PATH, 'a') as hf:
-            current_size = hf['X'].shape[0]
-            new_size = current_size + len(X_batch)
-            hf['X'].resize((new_size, FRAMES_PER_VIDEO, 224, 224, 3))
-            hf['X'][current_size:new_size] = X_batch
-            hf['y'].resize((new_size,))
-            hf['y'][current_size:new_size] = y_batch
-        return H5_FILE_PATH
+    def update_central_metadata(self, new_records):
+        """Merkezi metadata.json dosyasını yükler, günceller ve kaydeder."""
+        metadata = {}
+        if self.metadata_path.exists():
+            try:
+                with open(self.metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            except Exception as e:
+                print(f"[UYARI] Merkezi metadata.json okunamadı, yeniden oluşturuluyor: {e}")
+                
+        metadata.update(new_records)
+        
+        with open(self.metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=4)
+        print(f"[METADATA] {len(new_records)} video verisi merkezi metadata.json'a eklendi/güncellendi.")
 
     def _find_chunk_folders(self, base_dir: Path) -> list:
         """İndirilen dataset içindeki dfdc_train_part_XX klasörlerini bulur."""
         chunk_folders = []
-        # Dataset yapısı: base_dir/dfdc_train_part_XX/dfdc_train_part_X/*.mp4 + metadata.json
         for d in sorted(base_dir.rglob("dfdc_train_part_*")):
             if d.is_dir():
-                # metadata.json varsa veya mp4 dosyaları varsa bu bir chunk klasörü
                 has_videos = any(d.rglob("*.mp4"))
                 if has_videos:
                     chunk_folders.append(d)
@@ -245,49 +220,79 @@ class PipelineOrchestrator:
         
         return filtered
 
-    def _process_chunk_folder(self, chunk_folder: Path, output_label: str):
-        """Bir chunk klasörünü işler (yüz çıkarma + kaydetme)."""
+    def _process_chunk_folder(self, chunk_folder: Path) -> bool:
+        """Bir chunk klasörünü işler. Başarılı olursa True, metadata bulamazsa False döner."""
         chunk_name = chunk_folder.name
         
-        # metadata.json'u bul (aynı dizinde veya üst dizinde olabilir)
+        # 1. DEDEKTİF MODU: Klasörün ne kadar derinine inmiş olursa olsun metadata'yı bul
         metadata = {}
-        for meta_candidate in [chunk_folder / "metadata.json", 
-                                chunk_folder.parent / "metadata.json"]:
-            if meta_candidate.exists():
-                with open(meta_candidate, 'r') as f:
-                    metadata = json.load(f)
-                break
+        print(f"\n[ARANIYOR] {chunk_name} içinde metadata.json taranıyor...")
+        json_files = list(chunk_folder.rglob("*.json"))
         
+        for j_file in json_files:
+            if "metadata" in j_file.name.lower():
+                try:
+                    with open(j_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                    print(f"[BULUNDU] Metadata başarıyla okundu: {j_file.name}")
+                    break
+                except Exception as e:
+                    print(f"[HATA] Metadata okunamadı: {e}")
+                    
         videos = list(chunk_folder.rglob("*.mp4"))
         if not videos:
-            print(f"[UYARI] {chunk_name} içinde video bulunamadı, atlanıyor...")
-            return
+            print(f"[UYARI] {chunk_name} içinde hiç video bulunamadı.")
+            return True # Video yoksa boş klasördür, silinmesinde sakınca yok
             
-        X_chunk, y_chunk, processed_video_count = [], [], 0
+        # 2. GÜVENLİK KİLİDİ: Eğer hala metadata yoksa, SİLMEYİ İPTAL ET!
+        if not metadata:
+            print(f"\n[KRİTİK HATA] {chunk_name} içinde metadata.json BULUNAMADI!")
+            print(f"-> 100GB'lık veri ÇÖPE GİTMESİN diye silme işlemi iptal edildi.")
+            print(f"-> Lütfen {chunk_folder} yolunu manuel olarak inceleyin.\n")
+            return False 
+            
+        chunk_metadata_updates = {}
+        processed_video_count = 0
         
         print(f"[İŞLENİYOR] {chunk_name} içindeki {len(videos)} video analiz ediliyor...")
         for video_path in tqdm(videos, desc=f"Videolar ({chunk_name})"):
-            # metadata varsa etiket al, yoksa atla
-            if metadata:
-                if video_path.name not in metadata: continue
-                label_str = metadata[video_path.name]["label"]
-                label_val = 1.0 if label_str == "FAKE" else 0.0
-            else:
-                print(f"[UYARI] metadata.json bulunamadı, {chunk_name} atlanıyor...")
-                return
+            if video_path.name not in metadata: 
+                continue # Bu videonun kaydı yoksa atla
+                
+            label_str = metadata[video_path.name]["label"]
+            label_val = 1.0 if label_str == "FAKE" else 0.0
             
             face_sequence = self.extractor.process_video_to_array(video_path)
             if face_sequence is not None:
-                X_chunk.append(face_sequence)
-                y_chunk.append(label_val)
+                video_dest_dir = PROCESSED_DATA_DIR / label_str / video_path.stem
+                video_dest_dir.mkdir(parents=True, exist_ok=True)
+                
+                frame_filenames = []
+                for idx, face_frame in enumerate(face_sequence):
+                    frame_filename = f"frame_{idx}.jpg"
+                    frame_path = video_dest_dir / frame_filename
+                    
+                    # Pillow ile hızlı ve renk uzayı hatasız kaydetme
+                    from PIL import Image
+                    Image.fromarray(face_frame).save(frame_path, quality=95)
+                    frame_filenames.append(frame_filename)
+                
+                chunk_metadata_updates[video_path.name] = {
+                    "label": label_str,
+                    "label_val": label_val,
+                    "folder": f"{label_str}/{video_path.stem}",
+                    "frames": frame_filenames
+                }
                 processed_video_count += 1
         
-        print(f"[KAYDEDİLİYOR] {processed_video_count} video verisi {output_label} dosyasına yazılıyor...")
-        self.append_to_h5(X_chunk, y_chunk, chunk_name)
+        if chunk_metadata_updates:
+            self.update_central_metadata(chunk_metadata_updates)
+            
+        print(f"[KAYDEDİLDİ] {processed_video_count} video için yüz dizisi başarıyla çıkarıldı.")
+        return True # İşlem kusursuz bitti, ham veriyi silebilirsin
 
     def run(self):
-        output_label = ".h5" if _HAS_H5PY else ".npz"
-        print(f"\n--- DEEPFAKE {output_label} VERI ISLEME MOTORU BASLATILDI ---\n")
+        print(f"\n--- DEEPFAKE ARDIŞIK YÜZ GÖRÜNTÜLERİ İŞLEME MOTORU BAŞLATILDI ---\n")
         
         for ds_info in DFDC_DATASETS:
             slug = ds_info["slug"]
@@ -297,13 +302,11 @@ class PipelineOrchestrator:
             print(f"[DATASET] {label} ({slug})")
             print(f"{'='*60}\n")
             
-            # Dataset'i indir
             success = DatasetDownloader.download_dataset(slug, RAW_DATA_DIR)
             if not success:
                 print(f"[HATA] {slug} indirilemedi, sonraki dataset'e geçiliyor...")
                 continue
             
-            # İndirilen klasördeki chunk'ları bul
             chunk_folders = self._find_chunk_folders(RAW_DATA_DIR)
             
             if not chunk_folders:
@@ -314,14 +317,17 @@ class PipelineOrchestrator:
             for cf in chunk_folders:
                 print(f"  → {cf.name}")
             
-            # Her chunk'ı sırayla işle
             for chunk_folder in chunk_folders:
-                self._process_chunk_folder(chunk_folder, output_label)
-                # İşlenen chunk'ı sil (disk tasarrufu)
-                FileManager.cleanup_raw_folder(chunk_folder)
+                # 3. YENİ KONTROL: İşlem başarılı olduysa (True döndüyse) sil
+                is_success = self._process_chunk_folder(chunk_folder)
+                
+                if is_success:
+                    FileManager.cleanup_raw_folder(chunk_folder)
+                else:
+                    print(f"\n[GÜVENLİK PROTOKOLÜ DEVREDE]")
+                    print(f"-> {chunk_folder.name} klasörü silinmekten kurtarıldı ve diskte bırakıldı.\n")
         
-        if _HAS_H5PY: print("\n[BİTTİ] Bulunan tüm dosyalar başarıyla .h5 formatına sıkıştırıldı.")
-        else: print(f"\n[BİTTİ] Bulunan tüm dosyalar .npz parçalarına yazıldı: {NPZ_OUTPUT_DIR}")
+        print(f"\n[BİTTİ] Tüm dataset işlendi. Sonuçlar: {PROCESSED_DATA_DIR}")
 
 if __name__ == "__main__":
     pipeline = PipelineOrchestrator()

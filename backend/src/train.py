@@ -14,18 +14,26 @@ from config import PROCESSED_DATA_DIR
 def train_model():
     print("Yüksek Hızlı Veri Seti Hazırlanıyor...")
     
-    # HDF5 veri setimizin yolu
+    # Veri yolunu belirle (Öncelikli olarak yeni sıralı klasör yapısı, yoksa .h5 dosyası)
+    metadata_json_path = Path(PROCESSED_DATA_DIR) / "metadata.json"
     h5_path = Path(PROCESSED_DATA_DIR) / "deepfake_dataset.h5"
     
-    if not h5_path.exists():
-        print(f"[HATA] {h5_path} bulunamadı! Lütfen önce data_pipeline.py'yi çalıştırın.")
+    if metadata_json_path.exists():
+        data_path = PROCESSED_DATA_DIR
+        print(f"[BİLGİ] Veri yükleyici sıralı klasör modunda çalışacak: {data_path}")
+    elif h5_path.exists():
+        data_path = h5_path
+        print(f"[BİLGİ] Veri yükleyici HDF5 dosya modunda çalışacak: {data_path}")
+    else:
+        print(f"[HATA] İşlenmiş veri bulunamadı! {PROCESSED_DATA_DIR} altında metadata.json veya {h5_path} olmalı.")
+        print("Lütfen önce backend/utils/data_pipeline.py dosyasını çalıştırın.")
         return
 
     # Veri artırımı (Augmentation) fonksiyonlarını al
     train_transform, _ = get_transforms()
     
-    # HDF5 üzerinden çalışan yeni Dataset sınıfımız
-    dataset = FastDeepfakeDataset(data_path=str(h5_path), transform=train_transform)
+    # Dataset sınıfımız
+    dataset = FastDeepfakeDataset(data_path=str(data_path), transform=train_transform)
     
     # DataLoader
     dataloader = DataLoader(dataset, batch_size=4, shuffle=True)

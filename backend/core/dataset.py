@@ -9,7 +9,7 @@ from albumentations.pytorch import ToTensorV2
 class DeepfakeDataset(Dataset):
     def __init__(self, root_dir: str, transform=None):
         """
-        root_dir: 'C:/Users/ramaz/Desktop/Dataset/processed_faces' olmalı
+        root_dir: 'D:/Deepfake_Data/processed_faces' olmalı
         """
         self.root_dir = Path(root_dir)
         self.transform = transform

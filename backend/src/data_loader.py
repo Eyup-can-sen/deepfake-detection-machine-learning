@@ -1,28 +1,57 @@
 import torch
 from torch.utils.data import Dataset
-import h5py
 import numpy as np
 from pathlib import Path
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import cv2
+import json
+
+try:
+    import h5py
+    _HAS_H5PY = True
+except ImportError:
+    h5py = None
+    _HAS_H5PY = False
 
 class FastDeepfakeDataset(Dataset):
     def __init__(self, data_path: str, transform=None):
         """
-        data_path: .h5 dosyasının yolu veya .npz dosyalarının bulunduğu klasörün yolu.
+        data_path: .h5 dosyasının yolu, .npz dosyalarının bulunduğu klasörün yolu 
+                   veya metadata.json içeren işlenmiş yüz klasörünün (PROCESSED_DATA_DIR) yolu.
         """
         self.data_path = Path(data_path)
         self.transform = transform
         
         # Dosyanın tipini otomatik algıla
         self.is_h5 = self.data_path.is_file() and self.data_path.suffix == '.h5'
-        self.is_npz_dir = self.data_path.is_dir()
+        self.is_dir = self.data_path.is_dir()
         
-        if not (self.is_h5 or self.is_npz_dir):
-            raise ValueError("Geçersiz veri yolu! .h5 dosyası veya .npz klasörü olmalı.")
+        self.is_metadata_dir = False
+        self.is_npz_dir = False
+        
+        if self.is_dir:
+            # metadata.json varsa ardışık JPG klasör modudur
+            if (self.data_path / "metadata.json").exists():
+                self.is_metadata_dir = True
+            else:
+                self.is_npz_dir = True
+                
+        if not (self.is_h5 or self.is_metadata_dir or self.is_npz_dir):
+            raise ValueError("Geçersiz veri yolu! .h5 dosyası, metadata.json içeren klasör veya .npz klasörü olmalı.")
+
+        # --- ARDIŞIK JPG KLASÖR MODU ---
+        if self.is_metadata_dir:
+            with open(self.data_path / "metadata.json", 'r', encoding='utf-8') as f:
+                self.metadata = json.load(f)
+            self.video_keys = list(self.metadata.keys())
+            self.length = len(self.video_keys)
+            print(f"[BİLGİ] Sıralı Klasör Veri Seti Yüklendi. Toplam Örnek: {self.length}")
 
         # --- HDF5 (.h5) OKUMA MODU ---
-        if self.is_h5:
+        elif self.is_h5:
+            if not _HAS_H5PY:
+                raise ImportError("HDF5 (.h5) dosyalarını okumak için 'h5py' kütüphanesi kurulu olmalıdır.")
             # Sadece dosyanın başlıklarını okuyoruz (RAM'e yüklemiyoruz, okuma anında çekilecek)
             self.h5_file = h5py.File(self.data_path, 'r')
             self.length = self.h5_file['y'].shape[0]
@@ -49,7 +78,32 @@ class FastDeepfakeDataset(Dataset):
 
     def __getitem__(self, idx):
         # 1. Ham Veriyi Çek
-        if self.is_h5:
+        if self.is_metadata_dir:
+            video_key = self.video_keys[idx]
+            info = self.metadata[video_key]
+            
+            label = info["label_val"]
+            folder_path = self.data_path / info["folder"]
+            frame_files = info["frames"]
+            
+            video_frames = []
+            for f_name in frame_files:
+                img_path = folder_path / f_name
+                img = cv2.imread(str(img_path))
+                if img is None:
+                    img_rgb = np.zeros((224, 224, 3), dtype=np.uint8)
+                else:
+                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                video_frames.append(img_rgb)
+                
+            # Padding
+            while len(video_frames) < 5:
+                if len(video_frames) > 0:
+                    video_frames.append(video_frames[-1])
+                else:
+                    video_tensor = np.zeros((224, 224, 3), dtype=np.uint8)
+                    video_frames.append(video_tensor)
+        elif self.is_h5:
             # Diskten sadece istenen index'teki videonun 5 karesini ışık hızında RAM'e al
             video_frames = self.h5_file['X'][idx] 
             label = self.h5_file['y'][idx]
