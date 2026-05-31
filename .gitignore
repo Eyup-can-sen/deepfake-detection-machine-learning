@@ -179,3 +179,14 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# --- DEEPFAKE PROJESİ ÖZEL DOSYALAR ---
+
+# Veri setleri (GitHub'a atılmayacak kadar büyük)
+data/
+
+# Model ağırlıkları ve eğitim çıktıları
+models/
+*.pth
+*.h5
+*.pt
