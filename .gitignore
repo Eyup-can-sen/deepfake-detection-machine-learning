@@ -201,6 +201,14 @@ models/
 *.pth
 *.h5
 *.pt
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+
+frontend/node_modules/
+frontend/.next/
+=======
+>>>>>>> gecici-yedek
 *.onnx
 
 # Editör Ayarları (Sisteme özel yolların ekibe gitmemesi için)
@@ -208,4 +216,9 @@ models/
 
 # İşletim sistemi kalıntıları
 .DS_Store
+<<<<<<< HEAD
 Thumbs.db
+=======
+Thumbs.db
+>>>>>>> 74bc6a2 (feat: GPU destekli CNN+LSTM deepfake model mimarisi ve egitim dongusu eklendi)
+>>>>>>> gecici-yedek

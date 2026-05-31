@@ -1,0 +1,835 @@
+DEEPFAKE PROJE KOD DÖKÜMÜ
+Oluşturulma Tarihi: 2026-05-31 16:52:05
+==================================================
+
+
+################################################################################
+### DOSYA: .\extract_codes_file.py
+### SATIR SAYISI: 99
+################################################################################
+
+import os
+from datetime import datetime
+
+# MERNA projesinde senin yazdığın ana klasörler
+MY_STUFF = ['backend', 'frontend', 'src'] 
+
+# Sayımı bozacak kütüphane ve sistem klasörleri
+FORBIDDEN_DIRS = {
+    'node_modules', 'venv', '.venv', 'env', '.git', 
+    '__pycache__', '.next', 'dist', 'build', '.idea', '.vscode'
+}
+
+# İçindeki kodlar bize ait olmayan yollar
+FORBIDDEN_PATHS = [
+    'components/ui',
+    'migrations',
+    'alembic'
+]
+
+OUTPUT_FILENAME = "deepfake_proje_kod_dokumani.txt"
+
+def merna_full_backup_and_detective():
+    stats = []
+    folder_totals = {}
+    total_lines = 0
+    
+    print(f"--- DEEPFAKE PROJE KOD DÖKÜMÜ Başladı ---")
+    print(f"Çıktı dosyası: {OUTPUT_FILENAME}\n")
+
+    with open(OUTPUT_FILENAME, 'w', encoding='utf-8') as report_file:
+        # Dosya başına başlık ekle
+        report_file.write(f"DEEPFAKE PROJE KOD DÖKÜMÜ\n")
+        report_file.write(f"Oluşturulma Tarihi: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        report_file.write("="*50 + "\n\n")
+
+        for root, dirs, files in os.walk('.'):
+            # Yasaklı klasörleri temizle
+            dirs[:] = [d for d in dirs if d.lower() not in FORBIDDEN_DIRS]
+            
+            normalized_root = root.replace(os.sep, '/')
+            
+            # Yasaklı yolları atla
+            if any(fp in normalized_root for fp in FORBIDDEN_PATHS):
+                continue
+
+            parts = root.split(os.sep)
+            if root != '.':
+                if any(p.lower() in FORBIDDEN_DIRS for p in parts):
+                    continue
+
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                # Desteklenen dosya türleri
+                if ext in {'.py', '.js', '.ts', '.vue', '.css', '.html', '.tsx'}:
+                    path = os.path.join(root, file)
+                    try:
+                        with open(path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                            line_count = len(content.splitlines())
+                            
+                            # İstatistikleri topla
+                            stats.append((path, line_count))
+                            top_dir = parts[1] if len(parts) > 1 else "Root"
+                            folder_totals[top_dir] = folder_totals.get(top_dir, 0) + line_count
+                            total_lines += line_count
+
+                            # TXT Dosyasına Yazma İşlemi
+                            report_file.write(f"\n{'#'*80}\n")
+                            report_file.write(f"### DOSYA: {path}\n")
+                            report_file.write(f"### SATIR SAYISI: {line_count}\n")
+                            report_file.write(f"{'#'*80}\n\n")
+                            report_file.write(content)
+                            report_file.write("\n\n")
+                            
+                    except Exception as e:
+                        print(f"Hata: {path} okunamadı. ({e})")
+                        continue
+
+        # Dosyanın en sonuna özet bilgilerini ekle
+        report_file.write("\n\n" + "="*80 + "\n")
+        report_file.write("GENEL İSTATİSTİKLER\n")
+        report_file.write("="*80 + "\n")
+        for folder, total in folder_totals.items():
+            report_file.write(f"{folder:>15}: {total} satır\n")
+        report_file.write("-" * 30 + "\n")
+        report_file.write(f"TOPLAM KOD SATIRI: {total_lines}\n")
+
+    # Konsol çıktısı (Sıralı liste)
+    stats.sort(key=lambda x: x[1], reverse=True)
+    print(f"{'SATIR':<8} | {'DURUM':<15} | {'DOSYA YOLU'}")
+    print("-" * 80)
+    for path, count in stats:
+        status = "TAMAM" if count > 5 else "!! ŞÜPHELİ !!"
+        print(f"{count:<8} | {status:<15} | {path}")
+
+    print(f"\nİşlem tamamlandı! Tüm kodlar '{OUTPUT_FILENAME}' içerisine kaydedildi.")
+
+if __name__ == "__main__":
+    merna_full_backup_and_detective()
+
+
+################################################################################
+### DOSYA: .\backend\core\dataset.py
+### SATIR SAYISI: 68
+################################################################################
+
+import os
+from pathlib import Path
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+
+class DeepfakeDataset(Dataset):
+    def __init__(self, root_dir: str, transform=None):
+        """
+        root_dir: 'C:/Users/ramaz/Desktop/Dataset/processed_faces' olmalı
+        """
+        self.root_dir = Path(root_dir)
+        self.transform = transform
+        self.image_paths = []
+        self.labels = []
+        
+        # REAL = 0, FAKE = 1 olarak etiketliyoruz
+        classes = {'REAL': 0, 'FAKE': 1}
+        
+        for cls_name, cls_label in classes.items():
+            cls_dir = self.root_dir / cls_name
+            if not cls_dir.exists(): continue
+                
+            for img_name in os.listdir(cls_dir):
+                if img_name.endswith(('.jpg', '.jpeg', '.png')):
+                    self.image_paths.append(cls_dir / img_name)
+                    self.labels.append(cls_label)
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = str(self.image_paths[idx])
+        # OpenCV ile de okunabilir ama PIL bazen daha güvenlidir
+        image = Image.open(img_path).convert("RGB")
+        import numpy as np
+        image = np.array(image)
+        
+        label = self.labels[idx]
+
+        if self.transform:
+            augmented = self.transform(image=image)
+            image = augmented['image']
+
+        # Label'ı PyTorch tensorüne çevir
+        label = torch.tensor(label, dtype=torch.long)
+        return image, label
+
+# Eğitim (Train) ve Test (Val) için farklı transformasyonlar
+def get_transforms():
+    train_transform = A.Compose([
+        A.Resize(224, 224),
+        A.HorizontalFlip(p=0.5), # Rastgele sağa/sola çevir
+        A.RandomBrightnessContrast(p=0.2), # Işıkla oyna
+        A.ImageCompression(quality_lower=60, quality_upper=100, p=0.3), # WhatsApp kalite düşüşü simülasyonu
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet standartları
+        ToTensorV2(),
+    ])
+    
+    val_transform = A.Compose([
+        A.Resize(224, 224),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ])
+    
+    return train_transform, val_transform
+
+
+################################################################################
+### DOSYA: .\backend\core\model.py
+### SATIR SAYISI: 42
+################################################################################
+
+import torch
+import torch.nn as nn
+from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+
+class DeepfakeDetectorModel(nn.Module):
+    def __init__(self, num_classes=2):
+        super(DeepfakeDetectorModel, self).__init__()
+        
+        # Önceden eğitilmiş (Pretrained) modeli indir (Sadece ilk çalışmada indirir)
+        weights = EfficientNet_B0_Weights.DEFAULT
+        self.backbone = efficientnet_b0(weights=weights)
+        
+        # Gelecekte Grad-CAM için özellik haritalarını (feature maps) çekeceğimiz katman
+        self.features = self.backbone.features
+        
+        # Sınıflandırıcı kısmını değiştiriyoruz (Bizde 1000 değil, sadece 2 sınıf var: REAL/FAKE)
+        in_features = self.backbone.classifier[1].in_features
+        self.backbone.classifier[1] = nn.Sequential(
+            nn.Dropout(p=0.3, inplace=True),
+            nn.Linear(in_features, num_classes)
+        )
+
+    def forward(self, x):
+        # Normal eğitim sırasında sadece sonucu döndürür
+        return self.backbone(x)
+        
+    def get_features(self, x):
+        """Bu fonksiyon ileride XAI (Açıklanabilir YZ) Isı Haritaları için kullanılacak"""
+        return self.features(x)
+
+# Modelin RTX 5070'e aktarılması testi
+if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Model {device} üzerinde çalışacak.")
+    
+    model = DeepfakeDetectorModel().to(device)
+    
+    # Test için rastgele bir tensor gönder (Batch Size: 8, Kanal: 3, Boyut: 224x224)
+    dummy_input = torch.randn(8, 3, 224, 224).to(device)
+    output = model(dummy_input)
+    
+    print(f"Çıktı boyutu: {output.shape} (8 fotoğraf için [Gerçek_Skoru, Sahte_Skoru])")
+
+
+################################################################################
+### DOSYA: .\backend\src\config.py
+### SATIR SAYISI: 13
+################################################################################
+
+import os
+
+# Artık test için json dosyasının da içinde bulunduğu bu klasörü kullanıyoruz
+RAW_DATA_DIR = r"D:\Deepfake_Data\train_sample_videos" 
+
+# C Diskindeki projemizin ana dizini (Otomatik bulur)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Kırpılmış yüzleri ve işlenmiş ufak verileri kaydedeceğimiz proje içi klasör
+PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "data", "processed")
+
+# İşlenmiş veri klasörü yoksa otomatik oluştur
+os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
+
+
+################################################################################
+### DOSYA: .\backend\src\data_loader.py
+### SATIR SAYISI: 91
+################################################################################
+
+import cv2
+import os
+import json
+import torch
+from facenet_pytorch import MTCNN
+from config import RAW_DATA_DIR
+
+# GPU varsa GPU'yu, yoksa CPU'yu otomatik seç
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(f"Yüz algılama şu cihazda çalışıyor: {device}")
+
+# MTCNN yüz algılama modelini başlat
+mtcnn = MTCNN(keep_all=False, device=device)
+
+def extract_and_crop_faces(video_path, num_frames=5):
+    """Videodan yüzleri MTCNN ile bulup kırpar."""
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    if total_frames == 0:
+        return []
+
+    step = max(1, total_frames // num_frames)
+    cropped_faces = []
+
+    for i in range(num_frames):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
+        success, frame = cap.read()
+        
+        if success:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Yüz tespiti yap
+            boxes, _ = mtcnn.detect(frame_rgb)
+            
+            if boxes is not None:
+                # İlk tespit edilen yüzün koordinatlarını al
+                box = boxes[0]
+                x1, y1, x2, y2 = [int(b) for b in box]
+                
+                # Sınırların dışına çıkmayı engelle
+                h, w, _ = frame_rgb.shape
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                
+                face_crop = frame_rgb[y1:y2, x1:x2]
+                
+                # Kırpılan alan boş değilse 224x224'e boyutlandır
+                if face_crop.size != 0 and face_crop.shape[0] > 0 and face_crop.shape[1] > 0:
+                    face_resized = cv2.resize(face_crop, (224, 224))
+                    cropped_faces.append(face_resized)
+        else:
+            break
+
+    cap.release()
+    return cropped_faces
+
+def process_dataset(limit=2):
+    """
+    JSON dosyasını okur, videoları bulur ve yüzleri çıkarır.
+    """
+    json_path = os.path.join(RAW_DATA_DIR, "metadata.json")
+    
+    if not os.path.exists(json_path):
+        print(f"HATA: {json_path} bulunamadı! Yol: {json_path}")
+        return
+
+    with open(json_path, 'r') as f:
+        metadata = json.load(f)
+
+    print(f"Toplam {len(metadata)} video etiketi bulundu. İlk {limit} video işleniyor...\n")
+
+    count = 0
+    for video_name, info in metadata.items():
+        if count >= limit:
+            break
+            
+        label = info["label"] # "FAKE" veya "REAL"
+        video_path = os.path.join(RAW_DATA_DIR, video_name)
+        
+        if os.path.exists(video_path):
+            print(f"İşleniyor: {video_name} | Etiket: {label}")
+            faces = extract_and_crop_faces(video_path, num_frames=5)
+            print(f" -> Çıkarılan yüz sayısı: {len(faces)}\n")
+        else:
+            print(f"UYARI: {video_name} klasörde bulunamadı.")
+            
+        count += 1
+
+if __name__ == "__main__":
+    process_dataset(limit=2)
+
+
+################################################################################
+### DOSYA: .\backend\src\evaluate.py
+### SATIR SAYISI: 72
+################################################################################
+
+import torch
+from torchvision import transforms
+import numpy as np
+import os
+
+# Yazdığımız modülleri çağırıyoruz
+from model import DeepfakeDetector
+from data_loader import extract_and_crop_faces
+
+def predict_video(video_path, model_path="models/deepfake_model_test.pth"):
+    # Cihaz seçimi
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    
+    if not os.path.exists(model_path):
+        print(f"HATA: Eğitilmiş model bulunamadı ({model_path}). Lütfen önce train.py dosyasını çalıştırın.")
+        return
+        
+    if not os.path.exists(video_path):
+        print(f"HATA: Video bulunamadı ({video_path}).")
+        return
+
+    print("Yapay Zeka Yükleniyor...")
+    # Modeli iskelet olarak çağır ve eğitilmiş ağırlıkları içine doldur
+    model = DeepfakeDetector(sequence_length=5).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    
+    # Çok Kritik: Modeli eğitim (train) modundan test (eval) moduna alıyoruz. 
+    # (Bu sayede Dropout gibi sadece eğitimde çalışan katmanlar kapanır ve tam performans tahmin yapılır)
+    model.eval() 
+
+    # Görüntüleri eğitimdeki ile BİREBİR aynı formatta hazırlamalıyız
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    print(f"\n[{os.path.basename(video_path)}] Analiz ediliyor...")
+    faces = extract_and_crop_faces(video_path, num_frames=5)
+    
+    if len(faces) == 0:
+        print("Videoda yüz bulunamadı!")
+        return
+        
+    # Yüz eksiği varsa son kareyi kopyalayarak 5'e tamamla
+    while len(faces) < 5:
+        faces.append(faces[-1])
+
+    # Yüzleri tensöre çevir ve modele uygun boyuta (1, 5, 3, 224, 224) getir
+    face_tensors = [transform(face) for face in faces]
+    video_tensor = torch.stack(face_tensors).unsqueeze(0).to(device)
+
+    print("Sinir ağlarından geçiriliyor...")
+    # no_grad(): Test aşamasında olduğumuz için geriye dönük hesaplama (backward) yapmıyoruz, bellek tasarrufu!
+    with torch.no_grad():
+        output = model(video_tensor)
+        # Sigmoid: Çıkan sonucu 0 (Gerçek) ile 1 (Sahte) arasında bir ihtimale (%) dönüştürür
+        probability = torch.sigmoid(output).item() 
+
+    print("\n" + "=" * 40)
+    if probability > 0.5:
+        print(f" YAPAY ZEKA KARARI: FAKE (SAHTE)")
+        print(f" Güven Oranı: %{probability * 100:.2f}")
+    else:
+        print(f" YAPAY ZEKA KARARI: REAL (GERÇEK)")
+        print(f" Güven Oranı: %{(1 - probability) * 100:.2f}")
+    print("=" * 40 + "\n")
+
+if __name__ == "__main__":
+    # Test etmek istediğin videonun yolunu buraya yazıyorsun
+    # Önceki klasöründeki FAKE veya REAL bir videonun adını kopyalayabilirsin
+    ornek_video = r"D:\Deepfake_Data\train_sample_videos\aagfhgtpmv.mp4" 
+    predict_video(ornek_video)
+
+
+################################################################################
+### DOSYA: .\backend\src\model.py
+### SATIR SAYISI: 84
+################################################################################
+
+import torch
+import torch.nn as nn
+from torchvision import models
+
+class DeepfakeDetector(nn.Module):
+    def __init__(self, sequence_length=5, hidden_dim=256, lstm_layers=1):
+        super(DeepfakeDetector, self).__init__()
+        self.sequence_length = sequence_length
+        
+        # 1. MEKANSAL ÖZELLİK ÇIKARICI (CNN)
+        # ResNet18 kullanıyoruz. Önceden eğitilmiş ağırlıklar eğitimimizi hızlandıracak.
+        resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        
+        # ResNet'in son sınıflandırma katmanını (fc) siliyoruz, çünkü amacımız kedi/köpek seçmek değil, 
+        # sadece yüzün matematiksel özelliklerini (feature) elde etmek.
+        self.feature_extractor = nn.Sequential(*list(resnet.children())[:-1])
+        
+        # ResNet18'in özellik çıkış boyutu 512'dir.
+        cnn_out_dim = 512 
+        
+        # 2. ZAMANSAL ANALİZ (LSTM)
+        # CNN'den gelen 512 boyutlu özellikleri alıp, 5 karelik zaman serisi olarak işliyoruz.
+        self.lstm = nn.LSTM(
+            input_size=cnn_out_dim, 
+            hidden_size=hidden_dim, 
+            num_layers=lstm_layers, 
+            batch_first=True
+        )
+        
+        # 3. SON KARAR MEKANİZMASI (Classifier)
+        # LSTM'den çıkan sonucu (Gerçek mi / Sahte mi) ihtimaline çeviren son katmanlar.
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3), # Ağın ezberlemesini (overfitting) engellemek için
+            nn.Linear(128, 1) # Çıktı tek bir nöron (Sigmoid fonksiyonu ile 0-1 arası olasılık verecek)
+        )
+
+    def forward(self, x):
+        # x'in beklenen boyutu: (batch_size, sequence_length, channels, height, width)
+        # Yani: (Aynı anda işlenen video sayısı, 5 kare, 3 renk, 224 piksel, 224 piksel)
+        batch_size, seq_length, c, h, w = x.size()
+        
+        # 5 kareyi tek tek CNN'e sokabilmek için boyutları birleştiriyoruz
+        x = x.view(batch_size * seq_length, c, h, w)
+        
+        # CNN'den geçir (ResNet boyutları küçültüp özellikleri yoğunlaştırır)
+        features = self.feature_extractor(x)
+        
+        # Çıktıyı düzleştir (Flatten) -> Boyut: (batch_size * 5, 512)
+        features = features.view(features.size(0), -1)
+        
+        # LSTM'e sokabilmek için zaman (sequence) boyutunu geri getiriyoruz
+        # Yeni boyut: (batch_size, 5, 512)
+        features = features.view(batch_size, seq_length, -1)
+        
+        # LSTM'den geçir
+        lstm_out, _ = self.lstm(features)
+        
+        # Videonun tamamına bakıp karar vermek için LSTM'in ürettiği "en son" zaman adımının çıktısını alıyoruz
+        last_time_step_out = lstm_out[:, -1, :] 
+        
+        # Son sınıflandırıcıdan geçir
+        out = self.classifier(last_time_step_out)
+        
+        return out
+
+if __name__ == "__main__":
+    # Kodun hatasız derlenip derlenmediğini test edelim
+    print("Yapay Zeka Mimarisi İnşa Ediliyor...")
+    model = DeepfakeDetector(sequence_length=5)
+    
+    # Sisteme gerçek videolar yerine "rastgele sayılardan oluşan" 2 adet sahte video verelim: 
+    # Boyut yapısı -> (2 video, 5 kare, 3 RGB kanalı, 224x224 boyut)
+    dummy_input = torch.randn(2, 5, 3, 224, 224) 
+    
+    print(f"Modele giren test verisi boyutu: {dummy_input.shape}")
+    
+    # Veriyi sinir ağımızın içinden geçirelim
+    output = model(dummy_input)
+    
+    print(f"Model çıktısı boyutu: {output.shape}")
+    print(f"Örnek Karar Çıktıları (Henüz eğitilmediği için tamamen rastgele sayılar): \n{output.detach().numpy()}")
+    print("\nTEBRİKLER! CNN + LSTM mimarisi kusursuz bir şekilde ayağa kalktı.")
+
+
+################################################################################
+### DOSYA: .\backend\src\train.py
+### SATIR SAYISI: 121
+################################################################################
+
+import os
+import json
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as transforms
+import numpy as np
+
+# Yazdığımız diğer dosyalardan fonksiyon ve sınıfları çekiyoruz
+from data_loader import extract_and_crop_faces
+from model import DeepfakeDetector
+from config import RAW_DATA_DIR
+
+class DeepfakeDataset(Dataset):
+    """
+    PyTorch'un verileri sırayla ve düzenli çekmesini sağlayan özel Veri Seti sınıfımız.
+    """
+    def __init__(self, metadata_path, num_frames=5, limit=None):
+        self.num_frames = num_frames
+        self.data = []
+        
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+            
+        count = 0
+        for video_name, info in metadata.items():
+            if limit and count >= limit:
+                break
+            video_path = os.path.join(RAW_DATA_DIR, video_name)
+            if os.path.exists(video_path):
+                # PyTorch matematiksel çalıştığı için etiketleri sayıya çeviriyoruz: FAKE=1, REAL=0
+                label = 1.0 if info["label"] == "FAKE" else 0.0
+                self.data.append((video_path, label))
+                count += 1
+                
+        # ResNet'in sevdiği standart ImageNet renk normalizasyonu (Renkleri -1 ile 1 arasına çeker)
+        self.transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        video_path, label = self.data[idx]
+        
+        # MTCNN ile yüzleri çıkar (Numpy formatında)
+        faces = extract_and_crop_faces(video_path, num_frames=self.num_frames)
+        
+        # Eğer videoda hiç yüz bulunamadıysa (karanlık vs.), sistemi çökertmek yerine siyah kareler veriyoruz
+        if len(faces) == 0:
+            faces = [np.zeros((224, 224, 3), dtype=np.uint8) for _ in range(self.num_frames)]
+            
+        # Eğer videodan 5'ten az yüz çıktıysa, eksikleri tamamlamak için son kareyi kopyala (Padding)
+        while len(faces) < self.num_frames:
+            faces.append(faces[-1])
+            
+        # Çıkan yüzleri PyTorch Tensörüne (çok boyutlu matrislere) çevir
+        face_tensors = []
+        for face in faces:
+            face_tensor = self.transform(face) 
+            face_tensors.append(face_tensor)
+            
+        # 5 kareyi tek bir paket haline getir
+        video_tensor = torch.stack(face_tensors)
+        
+        return video_tensor, torch.tensor([label], dtype=torch.float32)
+
+def train_model():
+    print("Veri Seti Hazırlanıyor...")
+    metadata_path = os.path.join(RAW_DATA_DIR, "metadata.json")
+    
+    # DİKKAT: Bütün gün sürmemesi ve sistemi test etmek için şimdilik sadece 10 video okuyacağız (limit=10)
+    dataset = DeepfakeDataset(metadata_path, num_frames=5, limit=10)
+    
+    # DataLoader: Verileri modele "batch_size=2" yani ikişerli gruplar halinde verir
+    dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+    
+    # Cihaz kontrolü
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(f"Eğitim şu cihazda yapılacak: {device}")
+    
+    # Modeli ve optimizasyon araçlarını başlat
+    model = DeepfakeDetector(sequence_length=5).to(device)
+    criterion = nn.BCEWithLogitsLoss() # İki sınıflı (1/0) projeler için en iyi hata hesaplayıcı
+    optimizer = optim.Adam(model.parameters(), lr=0.0001) # Ağırlıkları güncelleyecek algoritma
+    
+    epochs = 3 # Aynı 10 videoyu 3 tur (epoch) boyunca modele göstereceğiz
+    
+    print("\nEğitim Başlıyor...")
+    for epoch in range(epochs):
+        model.train() 
+        epoch_loss = 0
+        
+        for batch_idx, (videos, labels) in enumerate(dataloader):
+            videos = videos.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()         # 1. Önceki turdan kalan hafızayı temizle
+            outputs = model(videos)       # 2. Modeli çalıştır ve tahminleri al
+            loss = criterion(outputs, labels) # 3. Tahmin ile gerçek etiket arasındaki HATA'yı (Loss) ölç
+            loss.backward()               # 4. Hatanın sebeplerini bulmak için geriye doğru git
+            optimizer.step()              # 5. Modeli iyileştirmek için nöronları güncelle
+            
+            epoch_loss += loss.item()
+            print(f"Epoch [{epoch+1}/{epochs}] | Batch [{batch_idx+1}/{len(dataloader)}] | Anlık Hata: {loss.item():.4f}")
+            
+        print(f"--- Epoch {epoch+1} Tamamlandı. Ortalama Hata: {epoch_loss/len(dataloader):.4f} ---\n")
+        
+    print("Eğitim Testi Başarıyla Tamamlandı!")
+    
+    # İleride ağırlıkları tekrar kullanabilmek için modeli kaydet
+    torch.save(model.state_dict(), "models/deepfake_model_test.pth")
+    print("Model ağırlıkları 'models/' klasörüne kaydedildi.")
+
+if __name__ == "__main__":
+    # Modelleri kaydedeceğimiz klasör yoksa oluştur
+    os.makedirs("models", exist_ok=True)
+    train_model()
+
+
+################################################################################
+### DOSYA: .\backend\utils\data_pipeline.py
+### SATIR SAYISI: 169
+################################################################################
+
+import os
+from env import load_env_variables
+import zipfile
+import shutil
+import subprocess
+import cv2
+import torch
+from pathlib import Path
+from tqdm import tqdm
+from facenet_pytorch import MTCNN
+
+# Yolları senin yapına göre dinamik ayarlıyoruz
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATASET_DIR = Path(r"C:\Users\ramaz\Desktop\Dataset")
+RAW_DIR = DATASET_DIR / "raw"
+PROCESSED_DIR = DATASET_DIR / "processed_faces"
+STATS_FILE = DATASET_DIR / "stats.txt"
+
+COMPETITION_NAME = "deepfake-detection-challenge"
+# Kaggle'daki zip isimleri genelde 00.zip, 01.zip şeklindedir (Örn: 50 parça)
+TOTAL_CHUNKS = 50 
+
+class FileManager:
+    """İndirme, arşivden çıkarma ve silme işlemlerini yönetir."""
+    
+    @staticmethod
+    def ensure_directories():
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+        if not STATS_FILE.exists():
+            STATS_FILE.touch()
+
+    @staticmethod
+    def download_chunk(chunk_name: str) -> bool:
+        zip_path = RAW_DIR / chunk_name
+        if zip_path.exists():
+            print(f"[BİLGİ] {chunk_name} zaten mevcut. İndirme atlanıyor...")
+            return True
+        
+        print(f"[İNDİRİLİYOR] {chunk_name} Kaggle'dan çekiliyor...")
+        try:
+            # Kaggle API'sini terminal komutu olarak çağırıyoruz
+            subprocess.run([
+                "kaggle", "competitions", "download", 
+                "-c", COMPETITION_NAME, 
+                "-f", chunk_name, 
+                "-p", str(RAW_DIR)
+            ], check=True)
+            return True
+        except subprocess.CalledProcessError:
+            print(f"[HATA] {chunk_name} indirilemedi. Bağlantıyı veya kaggle.json'ı kontrol et.")
+            return False
+
+    @staticmethod
+    def extract_and_delete_zip(chunk_name: str) -> Path:
+        zip_path = RAW_DIR / chunk_name
+        extract_path = RAW_DIR / chunk_name.replace(".zip", "")
+        
+        print(f"[ÇIKARTILIYOR] {chunk_name} arşivden çıkarılıyor...")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_path)
+            
+        print(f"[TEMİZLİK] {chunk_name} (.zip dosyası) siliniyor...")
+        os.remove(zip_path) # Hafızayı korumak için zip'i hemen siliyoruz
+        
+        return extract_path
+
+    @staticmethod
+    def cleanup_raw_folder(folder_path: Path):
+        print(f"[TEMİZLİK] İşlenmiş ham videolar siliniyor: {folder_path}")
+        shutil.rmtree(folder_path, ignore_errors=True)
+
+
+class FaceExtractor:
+    """RTX 5070 kullanarak videolardan yüz kırpma işlemlerini yapar."""
+    
+    def __init__(self):
+        # CUDA kontrolü ve MTCNN yüz tespit modelinin yüklenmesi
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        print(f"[SİSTEM] Yüz çıkarıcı {self.device} üzerinde çalışıyor.")
+        
+        # margin: yüzün etrafında biraz boşluk bırakır, select_largest: sadece ana karakteri alır
+        self.mtcnn = MTCNN(margin=20, keep_all=False, select_largest=True, post_process=False, device=self.device)
+
+    def process_video(self, video_path: Path, output_dir: Path) -> int:
+        """Videoyu okur, saniyede 1 kare (FPS) alarak yüzleri kaydeder."""
+        cap = cv2.VideoCapture(str(video_path))
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        if fps == 0: fps = 30 # Fallback
+        
+        frame_count = 0
+        saved_faces = 0
+        video_name = video_path.stem
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            # Sadece saniyede 1 kare alarak veri tekrarını önlüyor ve hafıza kurtarıyoruz
+            if frame_count % fps == 0:
+                # OpenCV BGR okur, MTCNN RGB bekler
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Yüzü tespit et ve kaydet
+                face_filename = output_dir / f"{video_name}_frame_{frame_count}.jpg"
+                
+                try:
+                    # MTCNN doğrudan tensör veya imaj döndürür, save_path verirsek kendi kaydeder
+                    face = self.mtcnn(frame_rgb, save_path=str(face_filename))
+                    if face is not None:
+                        saved_faces += 1
+                except Exception as e:
+                    pass # Tespit edilemeyen bulanık kareleri atla
+                    
+            frame_count += 1
+            
+        cap.release()
+        return saved_faces
+
+
+class PipelineOrchestrator:
+    """Tüm süreci yöneten ana sınıf."""
+    
+    def __init__(self):
+        FileManager.ensure_directories()
+        self.extractor = FaceExtractor()
+        
+    def log_stats(self, chunk_name: str, face_count: int):
+        """Hocaya sunulacak istatistikleri txt dosyasına yazar."""
+        with open(STATS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{chunk_name} = {face_count} görsel\n")
+        print(f"[BAŞARILI] {chunk_name} işlendi. Toplam {face_count} yüz kırpıldı ve kaydedildi.")
+
+    def run(self):
+        print("\n--- DEEPFAKE VERİ İŞLEME MOTORU BAŞLATILDI ---\n")
+        
+        for i in range(TOTAL_CHUNKS):
+            # 00.zip, 01.zip formatını oluşturur
+            chunk_name = f"{i:02d}.zip"
+            
+            # 1. İndirme (Eğer zaten varsa atlar)
+            success = FileManager.download_chunk(chunk_name)
+            if not success:
+                continue
+                
+            # 2. Arşivden çıkarma ve .zip'i anında silme
+            extract_folder = FileManager.extract_and_delete_zip(chunk_name)
+            
+            # 3. Klasördeki tüm .mp4 dosyalarını bul ve işle
+            videos = list(extract_folder.rglob("*.mp4"))
+            chunk_face_count = 0
+            
+            print(f"[İŞLENİYOR] {chunk_name} içindeki {len(videos)} video analiz ediliyor...")
+            for video_path in tqdm(videos, desc="Videolar"):
+                faces_saved = self.extractor.process_video(video_path, PROCESSED_DIR)
+                chunk_face_count += faces_saved
+                
+            # 4. İstatistikleri kaydet
+            self.log_stats(chunk_name, chunk_face_count)
+            
+            # 5. Ham videoları tamamen sil (Diski rahatlat)
+            FileManager.cleanup_raw_folder(extract_folder)
+            
+        print("\n[BİTTİ] Tüm veri seti başarıyla işlendi ve temizlendi.")
+
+if __name__ == "__main__":
+    pipeline = PipelineOrchestrator()
+    pipeline.run()
+
+
+
+================================================================================
+GENEL İSTATİSTİKLER
+================================================================================
+           Root: 99 satır
+        backend: 660 satır
+------------------------------
+TOPLAM KOD SATIRI: 759
