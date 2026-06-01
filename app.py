@@ -136,7 +136,7 @@ with tab1:
 
                             with torch.no_grad():
                                 autocast_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                                with torch.amp.autocast(autocast_device):
+                                with torch.amp.autocast(device_type=autocast_device, dtype=torch.float16):
                                     outputs = model(batch_tensor).view(-1)
                                     probabilities = torch.sigmoid(outputs).cpu().numpy()
                             
@@ -185,9 +185,24 @@ with tab2:
         st.error("**Early Stopping:** 7 Epoch")
         st.success("**Optimizasyon:** torch.amp.autocast (FP16 Yarı Hassasiyet)")
 
-# ==========================================
-# SEKME 3: VERİ SETİ VE PIPELINE DETAYLARI
-# ==========================================
 with tab3:
-    st.header("Veri Seti ve İşleme Hattı")
-    st.write("Veri Seti Detayları...")
+    st.header("Veri Seti ve İşleme Hattı (Data Pipeline)")
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.subheader("Veri Kümesi (Dataset)")
+        st.write("- **Kaynak:** DFDC (Deepfake Detection Challenge)")
+        st.write("- **Toplam Örnek:** 45.796 Ardışık Yüz Kareleri")
+        st.write("- **Eğitim (Train) Seti:** %80 (36.637 Örnek)")
+        st.write("- **Doğrulama (Val) Seti:** %20 (9.159 Örnek)")
+        st.write("- **Görüntü Boyutları:** 224x224 Piksel (RGB)")
+        
+    with col_b:
+        st.subheader("Yüz Çıkarma ve Artırım (Augmentation)")
+        st.write("- **Yüz Tespiti:** MTCNN (Multi-task Cascaded Convolutional Networks)")
+        st.write("- **Zaman Serisi:** Her videodan kronolojik 5 ardışık kare (Sequence)")
+        st.write("- **Data Augmentation:** Albumentations kütüphanesi kullanıldı.")
+        st.write("  - Yatay Çevirme (Horizontal Flip %50)")
+        st.write("  - Rastgele Parlaklık/Kontrast")
+        st.write("  - **JPEG Sıkıştırma Artefaktları (Compression)** (Sosyal medya simülasyonu için)")
