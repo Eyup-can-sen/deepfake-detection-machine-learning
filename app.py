@@ -188,7 +188,7 @@ with tab2:
 with tab3:
     st.header("Veri Seti ve İşleme Hattı (Data Pipeline)")
     
-    col_a, col_b = st.columns(2)
+    col_a, col_b, col_c = st.columns(3)
     
     with col_a:
         st.subheader("Veri Kümesi (Dataset)")
@@ -206,3 +206,11 @@ with tab3:
         st.write("  - Yatay Çevirme (Horizontal Flip %50)")
         st.write("  - Rastgele Parlaklık/Kontrast")
         st.write("  - **JPEG Sıkıştırma Artefaktları (Compression)** (Sosyal medya simülasyonu için)")
+    
+    with col_c:
+        st.subheader("Yapay Zeka Mimarisi")
+        st.write("- **Uzamsal Çıkarım (Spatial):** ResNet (Residual Networks) tabanlı özellik çıkarıcı")
+        st.write("- **Zamansal Çıkarım (Temporal):** LSTM (Long Short-Term Memory) ağı (Ardışık karelerdeki mikromimik ve maske kaymalarını tespit etmek için)")
+        st.write("- **Aktivasyon:** Sigmoid (İkili sınıflandırma: Fake/Real)")
+        st.write("- **Kayıp Fonksiyonu (Loss):** BCEWithLogitsLoss (Binary Cross Entropy)")
+        st.write("- **Optimize Edici:** AdamW (Weight Decay ile aşırı öğrenmeyi engeller)")
