@@ -15,7 +15,7 @@ DATASET_ROOT_DIR = Path(ENV_DATASET_DIR)
 
 # Alt klasör yollarını tek merkezden dağıtıyoruz
 RAW_DATA_DIR = DATASET_ROOT_DIR / "raw"
-PROCESSED_DATA_DIR = DATASET_ROOT_DIR / "processed_faces"
+PROCESSED_DATA_DIR = DATASET_ROOT_DIR / "processed_faces_2"
 STATS_FILE = DATASET_ROOT_DIR / "stats.txt"
 
 # Sistem başlatıldığında bu klasörlerin var olduğundan emin ol, yoksa oluştur

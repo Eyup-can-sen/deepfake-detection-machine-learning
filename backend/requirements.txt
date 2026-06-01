@@ -9,8 +9,8 @@ facenet-pytorch
 opencv-python==4.8.1.78
 
 # Veri Analizi, Sıkıştırma ve Yardımcılar
-numpy==1.26.4
-pandas==3.0.3
+numpy
+pandas
 tqdm==4.67.3
 python-dotenv==1.0.1
 h5py==3.12.1

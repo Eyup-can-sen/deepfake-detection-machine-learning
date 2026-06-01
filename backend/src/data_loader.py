@@ -137,7 +137,8 @@ def get_transforms():
     train_transform = A.Compose([
         A.HorizontalFlip(p=0.5),
         A.RandomBrightnessContrast(p=0.2),
-        A.ImageCompression(quality_lower=60, quality_upper=100, p=0.3),
+        # Albumentations güncel sürümüne uygun hale getirildi (quality_range)
+        A.ImageCompression(quality_range=(60, 100), p=0.3),
         A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ToTensorV2(),
     ])

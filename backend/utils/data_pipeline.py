@@ -4,6 +4,7 @@ import json
 import zipfile
 import shutil
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed  # PARALEL İŞLEME İÇİN EKLENDİ
 
 # Proje ana dizinini yollara ekliyoruz
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -101,7 +102,6 @@ class DatasetDownloader:
                 force=True,
                 quiet=False
             )
-            # İndirme başarılı işareti bırak
             marker_file.write_text("ok")
             print(f"\n[BAŞARILI] {dataset_slug} başarıyla indirildi ve çıkartıldı!")
             return True
@@ -150,31 +150,43 @@ class FaceExtractor:
         if total_frames == 0: return None
 
         step = max(1, total_frames // FRAMES_PER_VIDEO)
-        cropped_faces = []
-
+        
+        valid_frames = []
         for i in range(FRAMES_PER_VIDEO):
             cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
             success, frame = cap.read()
             if success:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                box = _detect_face_box(frame_rgb, self.mtcnn)
-
-                if box is not None:
-                    x1, y1, x2, y2 = [int(b) for b in box]
-                    h, w, _ = frame_rgb.shape
-                    x1, y1 = max(0, x1), max(0, y1)
-                    x2, y2 = min(w, x2), min(h, y2)
-                    
-                    face_crop = frame_rgb[y1:y2, x1:x2]
-                    if face_crop.size != 0 and face_crop.shape[0] > 0 and face_crop.shape[1] > 0:
-                        face_resized = cv2.resize(face_crop, (224, 224))
-                        cropped_faces.append(face_resized)
-            else: break
-
+                valid_frames.append(frame_rgb)
+            else: 
+                break
         cap.release()
+
+        if len(valid_frames) == 0: return None
+
+        all_boxes, _ = self.mtcnn.detect(valid_frames)
+        cropped_faces = []
+
+        for idx, frame_rgb in enumerate(valid_frames):
+            boxes = all_boxes[idx]
+            box = boxes[0] if (boxes is not None and len(boxes) > 0) else None
+
+            if box is not None:
+                x1, y1, x2, y2 = [int(b) for b in box]
+                h, w, _ = frame_rgb.shape
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                
+                face_crop = frame_rgb[y1:y2, x1:x2]
+                if face_crop.size != 0 and face_crop.shape[0] > 0 and face_crop.shape[1] > 0:
+                    face_resized = cv2.resize(face_crop, (224, 224))
+                    cropped_faces.append(face_resized)
+
         if len(cropped_faces) == 0: return None
+        
         while len(cropped_faces) < FRAMES_PER_VIDEO: 
             cropped_faces.append(cropped_faces[-1])
+            
         return np.array(cropped_faces, dtype=np.uint8)
 
 class PipelineOrchestrator:
@@ -183,7 +195,6 @@ class PipelineOrchestrator:
         self.metadata_path = PROCESSED_DATA_DIR / "metadata.json"
         
     def update_central_metadata(self, new_records):
-        """Merkezi metadata.json dosyasını yükler, günceller ve kaydeder."""
         metadata = {}
         if self.metadata_path.exists():
             try:
@@ -199,7 +210,6 @@ class PipelineOrchestrator:
         print(f"[METADATA] {len(new_records)} video verisi merkezi metadata.json'a eklendi/güncellendi.")
 
     def _find_chunk_folders(self, base_dir: Path) -> list:
-        """İndirilen dataset içindeki dfdc_train_part_XX klasörlerini bulur."""
         chunk_folders = []
         for d in sorted(base_dir.rglob("dfdc_train_part_*")):
             if d.is_dir():
@@ -207,7 +217,6 @@ class PipelineOrchestrator:
                 if has_videos:
                     chunk_folders.append(d)
         
-        # Tekrarlı alt klasörleri filtrele (üst klasörü tut)
         filtered = []
         for folder in chunk_folders:
             is_child = False
@@ -220,11 +229,37 @@ class PipelineOrchestrator:
         
         return filtered
 
+    def _process_single_video(self, video_path: Path, metadata: dict):
+        """Tek bir videoyu işleyen Thread işçisi."""
+        if video_path.name not in metadata: 
+            return None
+            
+        label_str = metadata[video_path.name]["label"]
+        label_val = 1.0 if label_str == "FAKE" else 0.0
+        
+        face_sequence = self.extractor.process_video_to_array(video_path)
+        if face_sequence is not None:
+            video_dest_dir = PROCESSED_DATA_DIR / label_str / video_path.stem
+            video_dest_dir.mkdir(parents=True, exist_ok=True)
+            
+            frame_filenames = []
+            for idx, face_frame in enumerate(face_sequence):
+                frame_filename = f"frame_{idx}.jpg"
+                frame_path = video_dest_dir / frame_filename
+                Image.fromarray(face_frame).save(frame_path, quality=95)
+                frame_filenames.append(frame_filename)
+            
+            return video_path.name, {
+                "label": label_str,
+                "label_val": label_val,
+                "folder": f"{label_str}/{video_path.stem}",
+                "frames": frame_filenames
+            }
+        return None
+
     def _process_chunk_folder(self, chunk_folder: Path) -> bool:
-        """Bir chunk klasörünü işler. Başarılı olursa True, metadata bulamazsa False döner."""
         chunk_name = chunk_folder.name
         
-        # 1. DEDEKTİF MODU: Klasörün ne kadar derinine inmiş olursa olsun metadata'yı bul
         metadata = {}
         print(f"\n[ARANIYOR] {chunk_name} içinde metadata.json taranıyor...")
         json_files = list(chunk_folder.rglob("*.json"))
@@ -242,92 +277,110 @@ class PipelineOrchestrator:
         videos = list(chunk_folder.rglob("*.mp4"))
         if not videos:
             print(f"[UYARI] {chunk_name} içinde hiç video bulunamadı.")
-            return True # Video yoksa boş klasördür, silinmesinde sakınca yok
+            return True
             
-        # 2. GÜVENLİK KİLİDİ: Eğer hala metadata yoksa, SİLMEYİ İPTAL ET!
         if not metadata:
             print(f"\n[KRİTİK HATA] {chunk_name} içinde metadata.json BULUNAMADI!")
             print(f"-> 100GB'lık veri ÇÖPE GİTMESİN diye silme işlemi iptal edildi.")
-            print(f"-> Lütfen {chunk_folder} yolunu manuel olarak inceleyin.\n")
             return False 
             
         chunk_metadata_updates = {}
         processed_video_count = 0
         
-        print(f"[İŞLENİYOR] {chunk_name} içindeki {len(videos)} video analiz ediliyor...")
-        for video_path in tqdm(videos, desc=f"Videolar ({chunk_name})"):
-            if video_path.name not in metadata: 
-                continue # Bu videonun kaydı yoksa atla
-                
-            label_str = metadata[video_path.name]["label"]
-            label_val = 1.0 if label_str == "FAKE" else 0.0
+        # --- PARALEL THREAD HAVUZU KURULUMU ---
+        # İşlemcinin 4.76 GHz gücünü kullanmak için aynı anda 6 video işliyoruz.
+        # RTX 5070 bu yükü taşırken ekran kartı kullanımı tavan yapacaktır.
+        NUM_WORKERS = 6 
+        
+        print(f"[İŞLENİYOR] {chunk_name} içindeki {len(videos)} video PARALEL olarak ({NUM_WORKERS} Thread) analiz ediliyor...")
+        
+        with ThreadPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            # Tüm videolar için işleri thread havuzuna fırlatıyoruz
+            futures = {executor.submit(self._process_single_video, video_path, metadata): video_path for video_path in videos}
             
-            face_sequence = self.extractor.process_video_to_array(video_path)
-            if face_sequence is not None:
-                video_dest_dir = PROCESSED_DATA_DIR / label_str / video_path.stem
-                video_dest_dir.mkdir(parents=True, exist_ok=True)
-                
-                frame_filenames = []
-                for idx, face_frame in enumerate(face_sequence):
-                    frame_filename = f"frame_{idx}.jpg"
-                    frame_path = video_dest_dir / frame_filename
-                    
-                    # Pillow ile hızlı ve renk uzayı hatasız kaydetme
-                    from PIL import Image
-                    Image.fromarray(face_frame).save(frame_path, quality=95)
-                    frame_filenames.append(frame_filename)
-                
-                chunk_metadata_updates[video_path.name] = {
-                    "label": label_str,
-                    "label_val": label_val,
-                    "folder": f"{label_str}/{video_path.stem}",
-                    "frames": frame_filenames
-                }
-                processed_video_count += 1
+            # Sonuçlar tamamlandıkça tqdm barda ilerleme görülecek
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Videolar ({chunk_name})"):
+                try:
+                    result = future.result()
+                    if result is not None:
+                        video_name, update_info = result
+                        chunk_metadata_updates[video_name] = update_info
+                        processed_video_count += 1
+                except Exception as e:
+                    video_file = futures[future]
+                    print(f"\n[HATA] {video_file.name} işlenirken beklenmedik hata oluştu: {e}")
         
         if chunk_metadata_updates:
             self.update_central_metadata(chunk_metadata_updates)
             
         print(f"[KAYDEDİLDİ] {processed_video_count} video için yüz dizisi başarıyla çıkarıldı.")
-        return True # İşlem kusursuz bitti, ham veriyi silebilirsin
+        return True
 
     def run(self):
-        print(f"\n--- DEEPFAKE ARDIŞIK YÜZ GÖRÜNTÜLERİ İŞLEME MOTORU BAŞLATILDI ---\n")
+        print(f"\n--- DEEPFAKE ARDIŞIK YÜZ GÖRÜNTÜLERİ İŞLEME MOTORU ---\n")
+        print("Lütfen bir çalışma modu seçin:")
+        print("  [1] Otomatik Mod (Kaggle'dan 500GB İndir, İşle ve Temizle)")
+        print("  [2] Manuel Mod (Bilgisayarda Zaten İndirilmiş Olan Verileri İşle)")
         
-        for ds_info in DFDC_DATASETS:
-            slug = ds_info["slug"]
-            label = ds_info["label"]
+        secim = input("\nSeçiminiz (1 veya 2): ").strip()
+        
+        if secim == "2":
+            yerel_yol = input("Lütfen '.mp4' ve 'metadata.json' dosyalarının bulunduğu klasör yolunu girin: ").strip()
+            yerel_yol = yerel_yol.replace('"', '').replace("'", "")
+            hedef_klasor = Path(yerel_yol)
             
-            print(f"\n{'='*60}")
-            print(f"[DATASET] {label} ({slug})")
-            print(f"{'='*60}\n")
-            
-            success = DatasetDownloader.download_dataset(slug, RAW_DATA_DIR)
-            if not success:
-                print(f"[HATA] {slug} indirilemedi, sonraki dataset'e geçiliyor...")
-                continue
-            
-            chunk_folders = self._find_chunk_folders(RAW_DATA_DIR)
+            if not hedef_klasor.exists():
+                print(f"\n[HATA] Belirtilen yol bulunamadı: {hedef_klasor}")
+                return
+                
+            print(f"\n[BİLGİ] Yerel klasör taranıyor: {hedef_klasor}")
+            chunk_folders = self._find_chunk_folders(hedef_klasor)
             
             if not chunk_folders:
-                print(f"[UYARI] {slug} içinde işlenecek chunk klasörü bulunamadı!")
-                continue
-            
-            print(f"[BİLGİ] {len(chunk_folders)} chunk klasörü bulundu:")
-            for cf in chunk_folders:
-                print(f"  → {cf.name}")
-            
-            for chunk_folder in chunk_folders:
-                # 3. YENİ KONTROL: İşlem başarılı olduysa (True döndüyse) sil
-                is_success = self._process_chunk_folder(chunk_folder)
+                chunk_folders = [hedef_klasor]
                 
-                if is_success:
-                    FileManager.cleanup_raw_folder(chunk_folder)
-                else:
-                    print(f"\n[GÜVENLİK PROTOKOLÜ DEVREDE]")
-                    print(f"-> {chunk_folder.name} klasörü silinmekten kurtarıldı ve diskte bırakıldı.\n")
+            for chunk_folder in chunk_folders:
+                self._process_chunk_folder(chunk_folder)
+                print(f"[GÜVENLİK] Manuel mod kullanıldığı için '{chunk_folder.name}' klasörü silinmedi, diskte bırakıldı.")
+                
+            print(f"\n[BİTTİ] Yerel veriler başarıyla yüz tensörlerine dönüştürüldü: {PROCESSED_DATA_DIR}")
+
+        elif secim == "1":
+            for ds_info in DFDC_DATASETS:
+                slug = ds_info["slug"]
+                label = ds_info["label"]
+                
+                print(f"\n{'='*60}")
+                print(f"[DATASET] {label} ({slug})")
+                print(f"{'='*60}\n")
+                
+                success = DatasetDownloader.download_dataset(slug, RAW_DATA_DIR)
+                if not success:
+                    print(f"[HATA] {slug} indirilemedi, sonraki dataset'e geçiliyor...")
+                    continue
+                
+                chunk_folders = self._find_chunk_folders(RAW_DATA_DIR)
+                
+                if not chunk_folders:
+                    print(f"[UYARI] {slug} içinde işlenecek chunk klasörü bulunamadı!")
+                    continue
+                
+                print(f"[BİLGİ] {len(chunk_folders)} chunk klasörü bulundu:")
+                for cf in chunk_folders:
+                    print(f"  → {cf.name}")
+                
+                for chunk_folder in chunk_folders:
+                    is_success = self._process_chunk_folder(chunk_folder)
+                    if is_success:
+                        FileManager.cleanup_raw_folder(chunk_folder)
+                    else:
+                        print(f"\n[GÜVENLİK PROTOKOLÜ DEVREDE]")
+                        print(f"-> {chunk_folder.name} klasörü silinmekten kurtarıldı ve diskte bırakıldı.\n")
+            
+            print(f"\n[BİTTİ] Tüm dataset işlendi. Sonuçlar: {PROCESSED_DATA_DIR}")
         
-        print(f"\n[BİTTİ] Tüm dataset işlendi. Sonuçlar: {PROCESSED_DATA_DIR}")
+        else:
+            print("\n[HATA] Geçersiz seçim yaptınız. Lütfen programı yeniden başlatıp 1 veya 2'yi tuşlayın.")
 
 if __name__ == "__main__":
     pipeline = PipelineOrchestrator()
