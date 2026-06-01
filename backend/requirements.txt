@@ -10,7 +10,7 @@ torchvision==0.27.0
 # 2. Yüz Tanıma ve Görüntü İşleme
 # ==========================================
 facenet-pytorch
-opencv-python==4.8.1.78
+opencv-python
 Pillow
 
 # ==========================================

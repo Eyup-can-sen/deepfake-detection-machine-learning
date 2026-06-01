@@ -33,21 +33,10 @@ Model, dünya çapında kabul görmüş **DFDC (Deepfake Detection Challenge)** 
 
 Proje, bağımlılık çakışmalarını önlemek adına tek bir merkezi sanal ortam (`.venv`) üzerinden çalışacak şekilde yapılandırılmıştır.
 
-### 1. Gereksinimleri Yükleme
-Sanal ortamı aktif ettikten sonra gerekli kütüphaneleri yüklemek için:
-```bash
-pip install -r backend/requirements.txt
+### 1. Sanal Ortamı Aktifleştirme (Windows)
+Projeyi çalıştırmadan ve kurulum yapmadan önce terminalde ana dizindeyken sanal ortamı başlatın:
 
-2. Sanal Ortamı Aktifleştirme (Windows)
-Projeyi çalıştırmadan önce terminalde ana dizindeyken sanal ortamı başlatın:
 
-PowerShell
 .\.venv\Scripts\Activate.ps1
-(Terminal satırının başında (.venv) ibaresini görmelisiniz.)
-
-3. Arayüzü (Demo) Başlatma
-Sistemi canlı bir video ile test etmek, eğitim metriklerini ve model karar süreçlerini (şeffaflık menüsünü) görmek için Streamlit arayüzünü çalıştırın:
-
-PowerShell
+pip install -r backend/requirements.txt
 streamlit run app.py
-Tarayıcınızda otomatik olarak açılacak olan paneli kullanarak (varsayılan: http://localhost:8501), bilgisayarınızdaki herhangi bir videoyu sisteme sürükleyip anında analiz edebilirsiniz.
