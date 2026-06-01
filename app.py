@@ -9,8 +9,7 @@ from pathlib import Path
 from PIL import Image
 from facenet_pytorch import MTCNN
 
-FRONTEND_DIR = Path(__file__).resolve().parent
-ROOT_DIR = FRONTEND_DIR.parent
+ROOT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT_DIR / "backend"
 
 sys.path.append(str(BACKEND_DIR))
