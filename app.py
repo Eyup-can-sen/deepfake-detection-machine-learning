@@ -20,7 +20,7 @@ from src.data_loader import get_transforms
 
 st.set_page_config(page_title="Deepfake Dedektörü", page_icon="🕵️‍♂️", layout="wide")
 
-st.title("🕵️‍♂️ Spatio-Temporal Deepfake Tespit Sistemi")
+st.title("🕵️‍♂️ Deepfake Tespit Sistemi")
 
 tab1, tab2, tab3 = st.tabs(["🎥 Canlı Test (Demo)", "📊 Eğitim Metrikleri", "🧠 Veri Seti ve Mimari"])
 
